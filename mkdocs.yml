@@ -76,9 +76,11 @@ markdown_extensions:
   - pymdownx.inlinehilite
   - pymdownx.keys
   - pymdownx.magiclink:
-      repo_url_shorthand: true
+      repo_url_shorthand: false
       user: louistrue
       repo: ifc-lite
+      normalize_issue_symbols: true
+      normalize_commit_symbols: true
   - pymdownx.mark
   - pymdownx.smartsymbols
   - pymdownx.superfences:
