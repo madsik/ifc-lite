@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/louistrue/ifc-lite/actions"><img src="https://img.shields.io/github/actions/workflow/status/louistrue/ifc-lite/ci.yml?branch=main&style=flat-square&logo=github" alt="Build Status"></a>
+  <a href="https://github.com/louistrue/ifc-lite/actions"><img src="https://img.shields.io/github/actions/workflow/status/louistrue/ifc-lite/release.yml?branch=main&style=flat-square&logo=github" alt="Build Status"></a>
   <a href="https://github.com/louistrue/ifc-lite/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MPL--2.0-blue?style=flat-square" alt="License"></a>
   <a href="https://www.npmjs.com/package/@ifc-lite/parser"><img src="https://img.shields.io/npm/v/@ifc-lite/parser?style=flat-square&logo=npm&label=parser" alt="npm parser"></a>
   <a href="https://crates.io/crates/ifc-lite-core"><img src="https://img.shields.io/crates/v/ifc-lite-core?style=flat-square&logo=rust&label=core" alt="crates.io"></a>
@@ -31,14 +31,14 @@
 **IFC-Lite** is a next-generation IFC (Industry Foundation Classes) platform built with **Rust + WebAssembly** for parsing, geometry processing, and **WebGPU** for 3D visualization. It's designed to be a **95x smaller** and significantly faster alternative to existing web-based IFC solutions.
 
 <p align="center">
-  <strong>~86 KB total</strong> &nbsp;•&nbsp; <strong>1.9x faster</strong> &nbsp;•&nbsp; <strong>100% IFC4 schema</strong>
+  <strong>~650 KB WASM (~260 KB gzipped)</strong> &nbsp;•&nbsp; <strong>2.6x faster</strong> &nbsp;•&nbsp; <strong>100% IFC4X3 schema (876 entities)</strong>
 </p>
 
 ## Features
 
 | Feature | Description |
 |---------|-------------|
-| **STEP/IFC Parsing** | Zero-copy tokenization at ~1,259 MB/s with full IFC4 schema support (776 entities) |
+| **STEP/IFC Parsing** | Zero-copy tokenization at ~1,259 MB/s with full IFC4X3 schema support (876 entities) |
 | **Streaming Pipeline** | Progressive geometry processing - first triangles render in 300-500ms |
 | **WebGPU Rendering** | Modern GPU-accelerated 3D visualization with depth testing and frustum culling |
 | **Columnar Storage** | Memory-efficient TypedArray storage with 30% string deduplication |
@@ -188,9 +188,9 @@ ifc-lite/
 
 | Library | Size | Gzipped |
 |---------|------|---------|
-| **IFC-Lite** | **~86 KB** | **~28 KB** |
+| **IFC-Lite WASM** | **~650 KB** | **~260 KB** |
 | Traditional WASM | 8+ MB | N/A |
-| **Reduction** | **93%** | - |
+| **Reduction** | **92%** | - |
 
 ### Parse Performance
 
@@ -200,11 +200,19 @@ ifc-lite/
 | 50 MB | ~2.7s | Typical models |
 | 100+ MB | ~5s+ | Complex geometry |
 
+### Zero-Copy GPU Pipeline
+
+- **Zero-copy WASM to WebGPU**: Direct memory access from WASM linear memory to GPU buffers
+- **60-70% reduction** in peak RAM usage
+- **74% faster** parse time with optimized data flow
+- **40-50% faster** geometry-to-GPU pipeline
+
 ### Geometry Processing
 
-- **1.9x faster** mesh extraction than traditional solutions
+- **2.6x faster** overall than web-ifc (median 2.18x, up to 104x on some files)
 - Streaming pipeline with batched processing (100 meshes/batch)
 - First triangles visible in **300-500ms**
+- Optimized cache with instant lookup and O(1) spatial hierarchy
 
 ## Browser Requirements
 
