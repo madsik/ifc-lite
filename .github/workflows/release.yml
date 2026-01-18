@@ -15,6 +15,9 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
+    outputs:
+      published: ${{ steps.changesets.outputs.published }}
+      version: ${{ steps.get-version.outputs.version }}
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
@@ -58,13 +61,136 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Create GitHub Release
+      - name: Get Version
+        id: get-version
         if: steps.changesets.outputs.published == 'true'
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          gh release create "v${VERSION}" \
-            --title "v${VERSION}" \
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        if: steps.changesets.outputs.published == 'true'
+        run: |
+          gh release create "v${{ steps.get-version.outputs.version }}" \
+            --title "v${{ steps.get-version.outputs.version }}" \
             --notes "See CHANGELOG.md for details" \
             --verify-tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Build and upload server binaries for all platforms
+  build-server-binaries:
+    name: Build Server Binary (${{ matrix.target }})
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x64 (glibc)
+          - target: linux-x64
+            os: ubuntu-latest
+            rust-target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+
+          # Linux arm64 (glibc) - cross-compile
+          - target: linux-arm64
+            os: ubuntu-latest
+            rust-target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+            cross: true
+
+          # Linux x64 (musl/Alpine)
+          - target: linux-x64-musl
+            os: ubuntu-latest
+            rust-target: x86_64-unknown-linux-musl
+            archive: tar.gz
+
+          # macOS x64 (Intel)
+          - target: darwin-x64
+            os: macos-13
+            rust-target: x86_64-apple-darwin
+            archive: tar.gz
+
+          # macOS arm64 (Apple Silicon)
+          - target: darwin-arm64
+            os: macos-14
+            rust-target: aarch64-apple-darwin
+            archive: tar.gz
+
+          # Windows x64
+          - target: win32-x64
+            os: windows-latest
+            rust-target: x86_64-pc-windows-msvc
+            archive: zip
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      # Linux: Install cross-compilation tools
+      - name: Install Linux Cross-Compilation Tools
+        if: matrix.cross == true && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      # Linux musl: Install musl tools
+      - name: Install musl Tools
+        if: matrix.target == 'linux-x64-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      # Build the server binary
+      - name: Build Server Binary
+        run: |
+          cargo build --release --package ifc-lite-server --target ${{ matrix.rust-target }}
+        env:
+          # For cross-compilation
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      # Determine binary name and paths
+      - name: Prepare Binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.rust-target }}/release/ifc-lite-server dist/
+          chmod +x dist/ifc-lite-server
+
+      - name: Prepare Binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item "target/${{ matrix.rust-target }}/release/ifc-lite-server.exe" -Destination "dist/"
+
+      # Create archive
+      - name: Create Archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd dist
+          tar -czvf ../ifc-lite-server-${{ matrix.target }}.tar.gz ifc-lite-server
+
+      - name: Create Archive (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/ifc-lite-server.exe" -DestinationPath "ifc-lite-server-${{ matrix.target }}.zip"
+
+      # Upload to GitHub Release
+      - name: Upload to GitHub Release
+        run: |
+          gh release upload "v${{ needs.release.outputs.version }}" \
+            ifc-lite-server-${{ matrix.target }}.${{ matrix.archive }} \
+            --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

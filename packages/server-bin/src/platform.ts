@@ -17,6 +17,7 @@ export interface PlatformInfo {
   arch: Arch;
   binaryName: string;
   archiveName: string;
+  archiveType: 'tar.gz' | 'zip';
   targetTriple: string;
   isMusl: boolean;
 }
@@ -91,14 +92,16 @@ export function getPlatformInfo(): PlatformInfo {
   // Binary name varies by platform
   const binaryName = platform === 'win32' ? 'ifc-lite-server.exe' : 'ifc-lite-server';
 
-  // Archive name for downloads
-  const archiveName = `ifc-lite-server-${targetTriple}.tar.gz`;
+  // Archive type and name for downloads (Windows uses zip, others use tar.gz)
+  const archiveType = platform === 'win32' ? 'zip' : 'tar.gz';
+  const archiveName = `ifc-lite-server-${targetTriple}.${archiveType}`;
 
   return {
     platform,
     arch,
     binaryName,
     archiveName,
+    archiveType,
     targetTriple,
     isMusl,
   };

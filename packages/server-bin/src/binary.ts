@@ -6,14 +6,15 @@
  * Binary download, caching, and execution.
  */
 
-import { createWriteStream, existsSync, mkdirSync, chmodSync, statSync, unlinkSync } from 'fs';
+import { createWriteStream, existsSync, mkdirSync, chmodSync, statSync, unlinkSync, createReadStream } from 'fs';
 import { readFile, writeFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { pipeline } from 'stream/promises';
-import { createGunzip } from 'zlib';
+import { createGunzip, createInflateRaw } from 'zlib';
 import { spawn, type SpawnOptions } from 'child_process';
 import { fileURLToPath } from 'url';
 import { extract } from 'tar';
+import { execSync } from 'child_process';
 import { getPlatformInfo, getPlatformDescription, type PlatformInfo } from './platform.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -139,6 +140,40 @@ async function extractTarGz(archivePath: string, destDir: string): Promise<void>
 }
 
 /**
+ * Extract zip archive (Windows).
+ * Uses PowerShell on Windows, unzip on Unix (fallback).
+ */
+async function extractZip(archivePath: string, destDir: string): Promise<void> {
+  mkdirSync(destDir, { recursive: true });
+
+  if (process.platform === 'win32') {
+    // Use PowerShell on Windows
+    execSync(
+      `powershell -Command "Expand-Archive -Path '${archivePath}' -DestinationPath '${destDir}' -Force"`,
+      { stdio: 'pipe' }
+    );
+  } else {
+    // Use unzip on Unix (fallback, shouldn't normally be needed)
+    execSync(`unzip -o "${archivePath}" -d "${destDir}"`, { stdio: 'pipe' });
+  }
+}
+
+/**
+ * Extract archive based on type.
+ */
+async function extractArchive(
+  archivePath: string,
+  destDir: string,
+  archiveType: 'tar.gz' | 'zip'
+): Promise<void> {
+  if (archiveType === 'zip') {
+    await extractZip(archivePath, destDir);
+  } else {
+    await extractTarGz(archivePath, destDir);
+  }
+}
+
+/**
  * Download and cache the binary for the current platform.
  */
 export async function downloadBinary(onProgress?: ProgressCallback): Promise<string> {
@@ -200,8 +235,8 @@ export async function downloadBinary(onProgress?: ProgressCallback): Promise<str
 
   console.log('Extracting archive...');
 
-  // Extract archive
-  await extractTarGz(archivePath, CACHE_DIR);
+  // Extract archive based on type
+  await extractArchive(archivePath, CACHE_DIR, platformInfo.archiveType);
 
   // Make binary executable (Unix only)
   if (platformInfo.platform !== 'win32') {
