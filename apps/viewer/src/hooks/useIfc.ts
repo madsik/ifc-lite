@@ -9,7 +9,7 @@
 
 import { useMemo, useCallback, useRef } from 'react';
 import { useViewerStore } from '../store.js';
-import { IfcParser, detectFormat, parseIfcx } from '@ifc-lite/parser';
+import { IfcParser, detectFormat, parseIfcx, SpatialHierarchyBuilder } from '@ifc-lite/parser';
 import { GeometryProcessor, GeometryQuality, type MeshData } from '@ifc-lite/geometry';
 import { IfcQuery } from '@ifc-lite/query';
 import { BufferBuilder } from '@ifc-lite/geometry';
@@ -79,6 +79,7 @@ function rebuildSpatialHierarchy(
   const bySite = new Map<number, number[]>();
   const bySpace = new Map<number, number[]>();
   const storeyElevations = new Map<number, number>();
+  const storeyHeights = new Map<number, number>();
   const elementToStorey = new Map<number, number>();
 
   // Find IfcProject
@@ -161,6 +162,8 @@ function rebuildSpatialHierarchy(
     }
   }
 
+  // Note: storeyHeights remains empty for cache path - client uses on-demand property extraction
+
   return {
     project: projectNode,
     byStorey,
@@ -168,6 +171,7 @@ function rebuildSpatialHierarchy(
     bySite,
     bySpace,
     storeyElevations,
+    storeyHeights,
     elementToStorey,
 
     getStoreyElements(storeyId: number): number[] {
@@ -333,11 +337,48 @@ export function useIfc() {
       }
 
       // Rebuild spatial hierarchy from cache data (cache doesn't serialize it)
+      // Use SpatialHierarchyBuilder to extract elevations from source buffer
       if (!dataStore.spatialHierarchy && dataStore.entities && dataStore.relationships) {
-        dataStore.spatialHierarchy = rebuildSpatialHierarchy(
-          dataStore.entities,
-          dataStore.relationships
-        );
+        // Ensure we have source buffer and entityIndex for elevation extraction
+        if (dataStore.source && dataStore.source.length > 0 && dataStore.entityIndex && dataStore.strings) {
+          console.log('[useIfc] Building spatial hierarchy with elevation extraction from source buffer');
+          const builder = new SpatialHierarchyBuilder();
+          dataStore.spatialHierarchy = builder.build(
+            dataStore.entities,
+            dataStore.relationships,
+            dataStore.strings,
+            dataStore.source,
+            dataStore.entityIndex
+          );
+          console.log(`[useIfc] Spatial hierarchy built: ${dataStore.spatialHierarchy.storeyElevations.size} storey elevations extracted`);
+          
+          // Calculate storey heights from elevation differences (fallback if no property data)
+          if (dataStore.spatialHierarchy.storeyHeights.size === 0 && dataStore.spatialHierarchy.storeyElevations.size > 1) {
+            const sortedStoreys = Array.from(dataStore.spatialHierarchy.storeyElevations.entries())
+              .sort((a, b) => a[1] - b[1]); // Sort by elevation ascending
+            for (let i = 0; i < sortedStoreys.length - 1; i++) {
+              const [storeyId, elevation] = sortedStoreys[i];
+              const nextElevation = sortedStoreys[i + 1][1];
+              const height = nextElevation - elevation;
+              if (height > 0) {
+                dataStore.spatialHierarchy.storeyHeights.set(storeyId, height);
+              }
+            }
+            console.log(`[useIfc] Calculated ${dataStore.spatialHierarchy.storeyHeights.size} storey heights from elevation differences`);
+          }
+        } else {
+          console.warn('[useIfc] Missing data for elevation extraction:', {
+            hasSource: !!dataStore.source,
+            sourceLength: dataStore.source?.length ?? 0,
+            hasEntityIndex: !!dataStore.entityIndex,
+            hasStrings: !!dataStore.strings
+          });
+          // Fallback: use simplified rebuild if source data not available
+          dataStore.spatialHierarchy = rebuildSpatialHierarchy(
+            dataStore.entities,
+            dataStore.relationships
+          );
+        }
       }
 
       if (result.geometry) {
@@ -734,6 +775,7 @@ export function useIfc() {
           const bySite = new Map<number, number[]>();
           const bySpace = new Map<number, number[]>();
           const storeyElevations = new Map<number, number>();
+          const storeyHeights = new Map<number, number>();
 
           const nodesMap = new Map(
             dataModel.spatialHierarchy.nodes.map(n => [n.entity_id, n])
@@ -755,6 +797,8 @@ export function useIfc() {
             }
           }
 
+          // Note: storeyHeights will be populated after entityToPsets is built (see below)
+
           // Build project node tree
           const projectNode = buildSpatialNodeTree(
             dataModel.spatialHierarchy.project_id,
@@ -769,6 +813,7 @@ export function useIfc() {
             bySite,
             bySpace,
             storeyElevations,
+            storeyHeights,
             elementToStorey: dataModel.spatialHierarchy.element_to_storey,
             getStoreyElements: (storeyId: number) => byStorey.get(storeyId) || [],
             getStoreyByElevation: (z: number) => {
@@ -1081,6 +1126,41 @@ export function useIfc() {
           // Log summary of unmapped relationship types
           if (unmappedRelTypes.size > 0) {
             console.warn(`[useIfc] Found ${unmappedRelTypes.size} unmapped relationship types: ${Array.from(unmappedRelTypes).join(', ')}`);
+          }
+
+          // Extract storey heights from property sets (now that entityToPsets is built)
+          // This is O(storeys * props_per_storey) which is typically very small (< 100 total)
+          for (const storeyId of byStorey.keys()) {
+            const psets = entityToPsets.get(storeyId);
+            if (!psets) continue;
+            for (const pset of psets) {
+              for (const prop of pset.properties) {
+                const propName = prop.property_name.toLowerCase();
+                if (propName === 'grossheight' || propName === 'netheight' || propName === 'height') {
+                  const val = parseFloat(prop.property_value);
+                  if (!isNaN(val) && val > 0) {
+                    storeyHeights.set(storeyId, val);
+                    break;
+                  }
+                }
+              }
+              if (storeyHeights.has(storeyId)) break;
+            }
+          }
+
+          // Fallback: calculate heights from elevation differences if no property data
+          if (storeyHeights.size === 0 && storeyElevations.size > 1) {
+            const sortedStoreys = Array.from(storeyElevations.entries())
+              .sort((a, b) => a[1] - b[1]); // Sort by elevation ascending
+            for (let i = 0; i < sortedStoreys.length - 1; i++) {
+              const [storeyId, elevation] = sortedStoreys[i];
+              const nextElevation = sortedStoreys[i + 1][1];
+              const height = nextElevation - elevation;
+              if (height > 0) {
+                storeyHeights.set(storeyId, height);
+              }
+            }
+            console.log(`[useIfc] Calculated ${storeyHeights.size} storey heights from elevation differences`);
           }
 
           const createEdgeAccessor = (edges: Map<number, Array<{ target: number; type: RelationshipType; relationshipId: number }>>) => ({
@@ -1398,6 +1478,22 @@ export function useIfc() {
       // On-demand property extraction is now used for all modes - no background parse needed
       dataStorePromise.then(dataStore => {
         console.log('[useIfc] Data model parsing complete - properties available via on-demand extraction');
+        
+        // Calculate storey heights from elevation differences if not already populated
+        if (dataStore.spatialHierarchy && dataStore.spatialHierarchy.storeyHeights.size === 0 && dataStore.spatialHierarchy.storeyElevations.size > 1) {
+          const sortedStoreys = Array.from(dataStore.spatialHierarchy.storeyElevations.entries())
+            .sort((a, b) => a[1] - b[1]); // Sort by elevation ascending
+          for (let i = 0; i < sortedStoreys.length - 1; i++) {
+            const [storeyId, elevation] = sortedStoreys[i];
+            const nextElevation = sortedStoreys[i + 1][1];
+            const height = nextElevation - elevation;
+            if (height > 0) {
+              dataStore.spatialHierarchy.storeyHeights.set(storeyId, height);
+            }
+          }
+          console.log(`[useIfc] Calculated ${dataStore.spatialHierarchy.storeyHeights.size} storey heights from elevation differences`);
+        }
+        
         setIfcDataStore(dataStore);
       }).catch(err => {
         console.error('[useIfc] Data model parsing failed:', err);
