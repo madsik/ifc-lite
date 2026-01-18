@@ -12,6 +12,7 @@ import {
   Layers,
   FileText,
   Calculator,
+  Tag,
   MousePointer2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -84,6 +85,17 @@ export function PropertiesPanel() {
     return entityNode.quantities();
   }, [entityNode]);
 
+  // Build attributes array for display - must be before early return to maintain hook order
+  const attributes = useMemo(() => {
+    if (!entityNode) return [];
+    const attrs: Array<{ name: string; value: string }> = [];
+    if (entityNode.globalId) attrs.push({ name: 'GlobalId', value: entityNode.globalId });
+    if (entityNode.name) attrs.push({ name: 'Name', value: entityNode.name });
+    if (entityNode.description) attrs.push({ name: 'Description', value: entityNode.description });
+    if (entityNode.objectType) attrs.push({ name: 'ObjectType', value: entityNode.objectType });
+    return attrs;
+  }, [entityNode]);
+
   if (!selectedEntityId || !query) {
     return (
       <div className="h-full flex flex-col border-l-2 border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-black">
@@ -107,6 +119,8 @@ export function PropertiesPanel() {
   const entityType = entityNode!.type;
   const entityName = entityNode!.name;
   const entityGlobalId = entityNode!.globalId;
+  const entityDescription = entityNode!.description;
+  const entityObjectType = entityNode!.objectType;
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -200,6 +214,29 @@ export function PropertiesPanel() {
           </div>
         )}
       </div>
+
+      {/* IFC Attributes */}
+      {attributes.length > 0 && (
+        <Collapsible defaultOpen className="border-b">
+          <CollapsibleTrigger className="flex items-center gap-2 w-full p-3 hover:bg-muted/50 text-left">
+            <Tag className="h-4 w-4 text-muted-foreground" />
+            <span className="font-medium text-sm">Attributes</span>
+            <span className="text-xs text-muted-foreground ml-auto">{attributes.length}</span>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="divide-y border-t">
+              {attributes.map((attr) => (
+                <div key={attr.name} className="flex justify-between gap-2 px-3 py-1.5 text-sm">
+                  <span className="text-muted-foreground">{attr.name}</span>
+                  <span className="text-right truncate font-medium max-w-[60%]" title={attr.value}>
+                    {attr.value}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      )}
 
       {/* Tabs */}
       <Tabs defaultValue="properties" className="flex-1 flex flex-col overflow-hidden">
