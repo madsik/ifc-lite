@@ -9,17 +9,77 @@ import { ToolOverlays } from './ToolOverlays';
 import { useViewerStore } from '@/store';
 import { useIfc } from '@/hooks/useIfc';
 import { useWebGPU } from '@/hooks/useWebGPU';
-import { Upload, MousePointer, Layers, Info, Command, AlertTriangle, ChevronDown, ExternalLink } from 'lucide-react';
+import { Upload, MousePointer, Layers, Info, Command, AlertTriangle, ChevronDown, ExternalLink, Plus } from 'lucide-react';
+import type { MeshData, CoordinateInfo } from '@ifc-lite/geometry';
 
 export function ViewportContainer() {
-  const { geometryResult, ifcDataStore, loadFile, loading } = useIfc();
+  const { geometryResult, ifcDataStore, loadFile, loading, models, clearAllModels, loadFilesSequentially } = useIfc();
   const selectedStoreys = useViewerStore((s) => s.selectedStoreys);
   const typeVisibility = useViewerStore((s) => s.typeVisibility);
   const isolatedEntities = useViewerStore((s) => s.isolatedEntities);
+  // Multi-model support: get all loaded models from store (for merged geometry)
+  const storeModels = useViewerStore((s) => s.models);
+  const resetViewerState = useViewerStore((s) => s.resetViewerState);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [showTroubleshooting, setShowTroubleshooting] = useState(false);
   const webgpu = useWebGPU();
+
+  // Check if we have models loaded (for determining add vs replace behavior)
+  const hasModelsLoaded = models.size > 0 || (geometryResult?.meshes && geometryResult.meshes.length > 0);
+
+  // Multi-model: create mapping from modelId to modelIndex (stable order)
+  const modelIdToIndex = useMemo(() => {
+    const map = new Map<string, number>();
+    let index = 0;
+    for (const modelId of storeModels.keys()) {
+      map.set(modelId, index++);
+    }
+    return map;
+  }, [storeModels]);
+
+  // Multi-model: merge geometries from all visible models
+  const mergedGeometryResult = useMemo(() => {
+    // If we have federated models, merge their visible geometries
+    if (storeModels.size > 0) {
+      const allMeshes: MeshData[] = [];
+      let totalVertices = 0;
+      let totalTriangles = 0;
+      let mergedCoordinateInfo: CoordinateInfo | undefined;
+
+      for (const [modelId, model] of storeModels) {
+        // Skip hidden models - this is how model visibility works
+        if (!model.visible) continue;
+
+        const modelGeometry = model.geometryResult;
+        const modelIndex = modelIdToIndex.get(modelId) ?? 0;
+        if (modelGeometry?.meshes) {
+          // Tag each mesh with its modelIndex for selection/highlighting
+          for (const mesh of modelGeometry.meshes) {
+            allMeshes.push({ ...mesh, modelIndex });
+          }
+          totalVertices += modelGeometry.totalVertices || 0;
+          totalTriangles += modelGeometry.totalTriangles || 0;
+
+          // Use first model's coordinate info as base (could be improved to compute union)
+          if (!mergedCoordinateInfo && modelGeometry.coordinateInfo) {
+            mergedCoordinateInfo = modelGeometry.coordinateInfo;
+          }
+        }
+      }
+
+      // Return merged result (may be empty if all models hidden)
+      return {
+        meshes: allMeshes,
+        totalVertices,
+        totalTriangles,
+        coordinateInfo: mergedCoordinateInfo,
+      };
+    }
+
+    // Legacy mode (no federation): use original geometryResult
+    return geometryResult;
+  }, [storeModels, geometryResult, modelIdToIndex]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -46,35 +106,73 @@ export function ViewportContainer() {
       return;
     }
 
-    const file = e.dataTransfer.files[0];
-    if (file && (file.name.endsWith('.ifc') || file.name.endsWith('.ifcx'))) {
-      loadFile(file);
+    // Filter to only IFC files
+    const ifcFiles = Array.from(e.dataTransfer.files).filter(
+      f => f.name.endsWith('.ifc') || f.name.endsWith('.ifcx')
+    );
+
+    if (ifcFiles.length === 0) return;
+
+    if (hasModelsLoaded) {
+      // Models already loaded - add new files sequentially
+      loadFilesSequentially(ifcFiles);
+    } else if (ifcFiles.length === 1) {
+      // Single file, no models loaded - use loadFile
+      loadFile(ifcFiles[0]);
+    } else {
+      // Multiple files, no models loaded - use federation
+      resetViewerState();
+      clearAllModels();
+      loadFilesSequentially(ifcFiles);
     }
-  }, [loadFile, webgpu.supported]);
+  }, [loadFile, loadFilesSequentially, resetViewerState, clearAllModels, webgpu.supported, hasModelsLoaded]);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     // Block file loading if WebGPU not supported
     if (!webgpu.supported) {
       return;
     }
-    const file = e.target.files?.[0];
-    if (file) {
-      loadFile(file);
-    }
-  }, [loadFile, webgpu.supported]);
 
-  const hasGeometry = geometryResult?.meshes && geometryResult.meshes.length > 0;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    // Filter to only IFC files
+    const ifcFiles = Array.from(files).filter(
+      f => f.name.endsWith('.ifc') || f.name.endsWith('.ifcx')
+    );
+
+    if (ifcFiles.length === 0) return;
+
+    if (ifcFiles.length === 1) {
+      // Single file - use loadFile (simpler single-model path)
+      loadFile(ifcFiles[0]);
+    } else {
+      // Multiple files selected - use federation from the start
+      // Clear everything and start fresh, then load sequentially
+      resetViewerState();
+      clearAllModels();
+      loadFilesSequentially(ifcFiles);
+    }
+
+    // Reset input so same file can be selected again
+    e.target.value = '';
+  }, [loadFile, loadFilesSequentially, resetViewerState, clearAllModels, webgpu.supported]);
+
+  const hasGeometry = mergedGeometryResult?.meshes && mergedGeometryResult.meshes.length > 0;
+
+  // Check if any models are loaded (even if hidden) - used to show empty 3D vs starting UI
+  const hasLoadedModels = storeModels.size > 0 || (geometryResult?.meshes && geometryResult.meshes.length > 0);
 
   // Filter geometry based on type visibility only
   // PERFORMANCE FIX: Don't filter by storey or hiddenEntities here
   // Instead, let the renderer handle visibility filtering at the batch level
   // This avoids expensive batch rebuilding when visibility changes
   const filteredGeometry = useMemo(() => {
-    if (!geometryResult?.meshes) {
+    if (!mergedGeometryResult?.meshes) {
       return null;
     }
 
-    let meshes = geometryResult.meshes;
+    let meshes = mergedGeometryResult.meshes;
 
     // Filter by type visibility (spatial elements)
     meshes = meshes.filter(mesh => {
@@ -115,38 +213,70 @@ export function ViewportContainer() {
     });
 
     return meshes;
-  }, [geometryResult, typeVisibility]);
+  }, [mergedGeometryResult, typeVisibility]);
 
   // Compute combined isolation set (storeys + manual isolation)
   // This is passed to the renderer for batch-level visibility filtering
+  // Now supports multi-model: aggregates elements from all models for selected storeys
+  // IMPORTANT: Returns globalIds (meshes use globalIds after federation registry transformation)
   const computedIsolatedIds = useMemo(() => {
-    // If manual isolation is active, use that
+    // If manual isolation is active, use that (already contains globalIds)
     if (isolatedEntities !== null) {
       return isolatedEntities;
     }
 
     // If storeys are selected, compute combined element IDs from all selected storeys
-    if (ifcDataStore?.spatialHierarchy && selectedStoreys.size > 0) {
-      const hierarchy = ifcDataStore.spatialHierarchy;
-      const combinedIds = new Set<number>();
+    // across ALL models (multi-model support)
+    // NOTE: Storey hierarchy uses original expressIds, but meshes use globalIds
+    // We must transform expressIds -> globalIds using the model's offset
+    if (selectedStoreys.size > 0) {
+      const combinedGlobalIds = new Set<number>();
 
-      for (const storeyId of selectedStoreys) {
-        const storeyElementIds = hierarchy.byStorey.get(storeyId);
-        if (storeyElementIds) {
-          for (const id of storeyElementIds) {
-            combinedIds.add(id);
+      // Check each federated model's storeys
+      for (const [, model] of storeModels) {
+        const hierarchy = model.ifcDataStore?.spatialHierarchy;
+        if (!hierarchy) continue;
+
+        // Get this model's offset directly from the model (no need for registry)
+        const offset = model.idOffset ?? 0;
+
+        for (const storeyId of selectedStoreys) {
+          // Note: storeyId itself might be a globalId if the user selected via mesh click,
+          // or an original ID if selected via hierarchy panel. The byStorey map uses original IDs.
+          // For now, try both the storeyId and storeyId - offset
+          const storeyElementIds = hierarchy.byStorey.get(storeyId) || hierarchy.byStorey.get(storeyId - offset);
+          if (storeyElementIds) {
+            for (const originalExpressId of storeyElementIds) {
+              // Transform to globalId
+              const globalId = originalExpressId + offset;
+              combinedGlobalIds.add(globalId);
+            }
           }
         }
       }
 
-      if (combinedIds.size > 0) {
-        return combinedIds;
+      // Also check legacy ifcDataStore (for single-model mode without federation)
+      // In this case, offset is 0, so globalId = expressId
+      if (ifcDataStore?.spatialHierarchy && storeModels.size === 0) {
+        const hierarchy = ifcDataStore.spatialHierarchy;
+        for (const storeyId of selectedStoreys) {
+          const storeyElementIds = hierarchy.byStorey.get(storeyId);
+          if (storeyElementIds) {
+            for (const id of storeyElementIds) {
+              combinedGlobalIds.add(id); // offset = 0 for legacy single-model
+            }
+          }
+        }
+      }
+
+      if (combinedGlobalIds.size > 0) {
+        return combinedGlobalIds;
       }
     }
 
     // No isolation active
     return null;
-  }, [ifcDataStore, selectedStoreys, isolatedEntities]);
+  }, [storeModels, ifcDataStore, selectedStoreys, isolatedEntities]);
 
   // Grid Pattern
   const GridPattern = () => (
@@ -172,8 +302,9 @@ export function ViewportContainer() {
     </>
   );
 
-  // Empty state when no file is loaded
-  if (!hasGeometry && !loading) {
+  // Empty state when no file is loaded at all (show starting UI)
+  // But NOT when models are loaded but just hidden - in that case show empty 3D canvas
+  if (!hasLoadedModels && !loading) {
     return (
       <div
         className="relative h-full w-full bg-white dark:bg-black text-zinc-900 dark:text-zinc-50 overflow-hidden"
@@ -187,6 +318,7 @@ export function ViewportContainer() {
           ref={fileInputRef}
           type="file"
           accept=".ifc,.ifcx"
+          multiple
           onChange={handleFileSelect}
           className="hidden"
         />
@@ -419,13 +551,16 @@ export function ViewportContainer() {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {/* Drop overlay for when a file is already loaded */}
+      {/* Drop overlay for when a file is already loaded - shows "Add Model" */}
       {isDragging && (
-        <div className="absolute inset-0 z-50 bg-primary/10 backdrop-blur-[2px] flex items-center justify-center">
-          <div className="bg-white dark:bg-zinc-900 border-4 border-dashed border-primary p-8 shadow-2xl">
+        <div className="absolute inset-0 z-50 bg-[#9ece6a]/10 backdrop-blur-[2px] flex items-center justify-center">
+          <div className="bg-white dark:bg-[#1a1b26] border-4 border-dashed border-[#9ece6a] p-8 shadow-2xl">
             <div className="text-center">
-              <Upload className="h-12 w-12 mx-auto text-primary mb-4" />
-              <p className="text-xl font-bold uppercase text-primary">Replace current file</p>
+              <Plus className="h-12 w-12 mx-auto text-[#9ece6a] mb-4" />
+              <p className="text-xl font-black uppercase text-[#9ece6a]">Add Model to Scene</p>
+              <p className="text-sm font-mono text-zinc-500 dark:text-[#565f89] mt-2">
+                Drop to federate with {models.size} existing model{models.size !== 1 ? 's' : ''}
+              </p>
             </div>
           </div>
         </div>
@@ -433,8 +568,9 @@ export function ViewportContainer() {
 
       <Viewport
         geometry={filteredGeometry}
-        coordinateInfo={geometryResult?.coordinateInfo}
+        coordinateInfo={mergedGeometryResult?.coordinateInfo}
         computedIsolatedIds={computedIsolatedIds}
+        modelIdToIndex={modelIdToIndex}
       />
       <ViewportOverlays />
       <ToolOverlays />

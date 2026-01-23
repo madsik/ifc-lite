@@ -32,6 +32,7 @@ import {
   Layers,
   SquareX,
   Building2,
+  Plus,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -45,7 +46,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Progress } from '@/components/ui/progress';
-import { useViewerStore } from '@/store';
+import { useViewerStore, isIfcxDataStore } from '@/store';
 import { useIfc } from '@/hooks/useIfc';
 import { cn } from '@/lib/utils';
 import { GLTFExporter, CSVExporter } from '@ifc-lite/export';
@@ -128,7 +129,11 @@ interface MainToolbarProps {
 
 export function MainToolbar({ onShowShortcuts }: MainToolbarProps = {} as MainToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { loadFile, loading, progress, geometryResult, ifcDataStore } = useIfc();
+  const addModelInputRef = useRef<HTMLInputElement>(null);
+  const { loadFile, loading, progress, geometryResult, ifcDataStore, models, clearAllModels, loadFilesSequentially, loadFederatedIfcx, addIfcxOverlays, addModel } = useIfc();
+
+  // Check if we have models loaded (for showing add model button)
+  const hasModelsLoaded = models.size > 0 || (geometryResult?.meshes && geometryResult.meshes.length > 0);
   const activeTool = useViewerStore((state) => state.activeTool);
   const setActiveTool = useViewerStore((state) => state.setActiveTool);
   const theme = useViewerStore((state) => state.theme);
@@ -137,12 +142,14 @@ export function MainToolbar({ onShowShortcuts }: MainToolbarProps = {} as MainTo
   const isolateEntity = useViewerStore((state) => state.isolateEntity);
   const hideEntity = useViewerStore((state) => state.hideEntity);
   const showAll = useViewerStore((state) => state.showAll);
+  const clearStoreySelection = useViewerStore((state) => state.clearStoreySelection);
   const error = useViewerStore((state) => state.error);
   const cameraCallbacks = useViewerStore((state) => state.cameraCallbacks);
   const hoverTooltipsEnabled = useViewerStore((state) => state.hoverTooltipsEnabled);
   const toggleHoverTooltips = useViewerStore((state) => state.toggleHoverTooltips);
   const typeVisibility = useViewerStore((state) => state.typeVisibility);
   const toggleTypeVisibility = useViewerStore((state) => state.toggleTypeVisibility);
+  const resetViewerState = useViewerStore((state) => state.resetViewerState);
 
   // Check which type geometries exist
   const typeGeometryExists = useMemo(() => {
@@ -158,11 +165,72 @@ export function MainToolbar({ onShowShortcuts }: MainToolbarProps = {} as MainTo
   }, [geometryResult]);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      loadFile(file);
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    // Filter to only IFC files
+    const ifcFiles = Array.from(files).filter(
+      f => f.name.endsWith('.ifc') || f.name.endsWith('.ifcx')
+    );
+
+    if (ifcFiles.length === 0) return;
+
+    if (ifcFiles.length === 1) {
+      // Single file - use loadFile (simpler single-model path)
+      loadFile(ifcFiles[0]);
+    } else {
+      // Multiple files - check if ALL are IFCX (use federated loading for layer composition)
+      const allIfcx = ifcFiles.every(f => f.name.endsWith('.ifcx'));
+
+      resetViewerState();
+      clearAllModels();
+
+      if (allIfcx) {
+        // IFCX files use federated loading (layer composition - later files override earlier ones)
+        // This handles overlay files that add properties without geometry
+        console.log(`[MainToolbar] Loading ${ifcFiles.length} IFCX files with federated composition`);
+        loadFederatedIfcx(ifcFiles);
+      } else {
+        // Mixed or all IFC4 files - load sequentially as independent models
+        loadFilesSequentially(ifcFiles);
+      }
     }
-  }, [loadFile]);
+
+    // Reset input so same files can be selected again
+    e.target.value = '';
+  }, [loadFile, loadFilesSequentially, loadFederatedIfcx, resetViewerState, clearAllModels]);
+
+  const handleAddModelSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    // Filter to only IFC files
+    const ifcFiles = Array.from(files).filter(
+      f => f.name.endsWith('.ifc') || f.name.endsWith('.ifcx')
+    );
+
+    if (ifcFiles.length === 0) return;
+
+    // Check if adding IFCX files
+    const newFilesAreIfcx = ifcFiles.every(f => f.name.endsWith('.ifcx'));
+    const existingIsIfcx = isIfcxDataStore(ifcDataStore);
+
+    if (newFilesAreIfcx && existingIsIfcx) {
+      // Adding IFCX overlay(s) to existing IFCX model - re-compose with new layers
+      console.log(`[MainToolbar] Adding ${ifcFiles.length} IFCX overlay(s) to existing IFCX model - re-composing`);
+      addIfcxOverlays(ifcFiles);
+    } else if (newFilesAreIfcx && !existingIsIfcx && ifcDataStore) {
+      // User trying to add IFCX to IFC4 model - won't work
+      console.warn('[MainToolbar] Cannot add IFCX files to non-IFCX model');
+      alert(`IFCX overlay files cannot be added to IFC4 models.\n\nPlease load IFCX files separately.`);
+    } else {
+      // Standard case - add as independent models
+      loadFilesSequentially(ifcFiles);
+    }
+
+    // Reset input so same files can be selected again
+    e.target.value = '';
+  }, [loadFilesSequentially, addIfcxOverlays, ifcDataStore]);
 
   const handleIsolate = useCallback(() => {
     if (selectedEntityId) {
@@ -179,6 +247,11 @@ export function MainToolbar({ onShowShortcuts }: MainToolbarProps = {} as MainTo
       clearSelection();
     }
   }, [selectedEntityId, hideEntity, clearSelection]);
+
+  const handleShowAll = useCallback(() => {
+    showAll();
+    clearStoreySelection(); // Also clear storey filtering (matches 'A' keyboard shortcut)
+  }, [showAll, clearStoreySelection]);
 
   const handleExportGLB = useCallback(() => {
     if (!geometryResult) return;
@@ -282,7 +355,16 @@ export function MainToolbar({ onShowShortcuts }: MainToolbarProps = {} as MainTo
         ref={fileInputRef}
         type="file"
         accept=".ifc,.ifcx"
+        multiple
         onChange={handleFileSelect}
+        className="hidden"
+      />
+      <input
+        ref={addModelInputRef}
+        type="file"
+        accept=".ifc,.ifcx"
+        multiple
+        onChange={handleAddModelSelect}
         className="hidden"
       />
 
@@ -307,6 +389,27 @@ export function MainToolbar({ onShowShortcuts }: MainToolbarProps = {} as MainTo
         </TooltipTrigger>
         <TooltipContent>Open IFC File</TooltipContent>
       </Tooltip>
+
+      {/* Add Model button - only shown when models are loaded */}
+      {hasModelsLoaded && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={(e) => {
+                (e.currentTarget as HTMLButtonElement).blur();
+                addModelInputRef.current?.click();
+              }}
+              disabled={loading}
+              className="text-[#9ece6a] hover:text-[#9ece6a] hover:bg-[#9ece6a]/10"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Add Model to Scene (Multi-select supported)</TooltipContent>
+        </Tooltip>
+      )}
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -363,7 +466,7 @@ export function MainToolbar({ onShowShortcuts }: MainToolbarProps = {} as MainTo
       {/* Visibility */}
       <ActionButton icon={Focus} label="Isolate Selection" onClick={handleIsolate} shortcut="I" disabled={!selectedEntityId} />
       <ActionButton icon={EyeOff} label="Hide Selection" onClick={handleHide} shortcut="Del" disabled={!selectedEntityId} />
-      <ActionButton icon={Eye} label="Show All (Reset Filters)" onClick={showAll} shortcut="A" />
+      <ActionButton icon={Eye} label="Show All (Reset Filters)" onClick={handleShowAll} shortcut="A" />
 
       <DropdownMenu>
         <Tooltip>

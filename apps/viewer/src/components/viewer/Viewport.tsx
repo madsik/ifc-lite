@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useRef, useState, useMemo } from 'react';
-import { Renderer, MathUtils, type SnapTarget } from '@ifc-lite/renderer';
+import { Renderer, MathUtils, type SnapTarget, type PickResult } from '@ifc-lite/renderer';
 import type { MeshData, CoordinateInfo } from '@ifc-lite/geometry';
 import { useViewerStore, type MeasurePoint, type SnapVisualization } from '@/store';
 import {
@@ -22,6 +22,7 @@ import {
   useColorUpdateState,
   useIfcDataState,
 } from '../../hooks/useViewerSelectors.js';
+import { useModelSelection } from '../../hooks/useModelSelection.js';
 import {
   getEntityBounds,
   getEntityCenter,
@@ -36,15 +37,70 @@ interface ViewportProps {
   geometry: MeshData[] | null;
   coordinateInfo?: CoordinateInfo;
   computedIsolatedIds?: Set<number> | null;
+  modelIdToIndex?: Map<string, number>;
 }
 
-export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: ViewportProps) {
+export function Viewport({ geometry, coordinateInfo, computedIsolatedIds, modelIdToIndex }: ViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<Renderer | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
 
   // Selection state
-  const { selectedEntityId, selectedEntityIds, setSelectedEntityId, toggleSelection } = useSelectionState();
+  const { selectedEntityId, selectedEntityIds, setSelectedEntityId, setSelectedEntity, toggleSelection, models } = useSelectionState();
+  const selectedEntity = useViewerStore((s) => s.selectedEntity);
+  // Get the bulletproof store-based resolver (more reliable than singleton)
+  const resolveGlobalIdFromModels = useViewerStore((s) => s.resolveGlobalIdFromModels);
+
+  // Sync selectedEntityId with model-aware selectedEntity for PropertiesPanel
+  useModelSelection();
+
+  // Create reverse mapping from modelIndex to modelId for selection
+  const modelIndexToId = useMemo(() => {
+    if (!modelIdToIndex) return new Map<number, string>();
+    const reverse = new Map<number, string>();
+    for (const [modelId, index] of modelIdToIndex) {
+      reverse.set(index, modelId);
+    }
+    return reverse;
+  }, [modelIdToIndex]);
+
+  // Compute selectedModelIndex for renderer (multi-model selection highlighting)
+  const selectedModelIndex = selectedEntity && modelIdToIndex
+    ? modelIdToIndex.get(selectedEntity.modelId) ?? undefined
+    : undefined;
+
+  // Helper to handle pick result and set selection properly
+  // IMPORTANT: pickResult.expressId is now a globalId (transformed at load time)
+  // We use the store-based resolver to find (modelId, originalExpressId)
+  // This is more reliable than the singleton registry which can have bundling issues
+  const handlePickForSelection = (pickResult: PickResult | null) => {
+    if (!pickResult) {
+      setSelectedEntityId(null);
+      return;
+    }
+
+    const globalId = pickResult.expressId;
+
+    // Set globalId for renderer (highlighting uses globalIds directly)
+    setSelectedEntityId(globalId);
+
+    // Resolve globalId -> (modelId, originalExpressId) for property panel
+    // Use store-based resolver instead of singleton for reliability
+    const resolved = resolveGlobalIdFromModels(globalId);
+    if (resolved) {
+      // Set the EntityRef with ORIGINAL expressId (for property lookup in IfcDataStore)
+      setSelectedEntity({ modelId: resolved.modelId, expressId: resolved.expressId });
+    } else {
+      // Fallback for single-model mode (offset = 0, globalId = expressId)
+      // Try to find model from the old modelIndex if available
+      if (pickResult.modelIndex !== undefined && modelIndexToId) {
+        const modelId = modelIndexToId.get(pickResult.modelIndex);
+        if (modelId) {
+          setSelectedEntity({ modelId, expressId: globalId });
+        }
+      }
+    }
+  };
 
   // Visibility state - use computedIsolatedIds from parent (includes storey selection)
   // Fall back to store isolation if computedIsolatedIds is not provided
@@ -135,6 +191,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
         hiddenIds: hiddenEntitiesRef.current,
         isolatedIds: isolatedEntitiesRef.current,
         selectedId: selectedEntityIdRef.current,
+            selectedModelIndex: selectedModelIndexRef.current,
         clearColor: clearColorRef.current,
       });
     }
@@ -186,6 +243,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
   const hiddenEntitiesRef = useRef<Set<number>>(hiddenEntities);
   const isolatedEntitiesRef = useRef<Set<number> | null>(isolatedEntities);
   const selectedEntityIdRef = useRef<number | null>(selectedEntityId);
+  const selectedModelIndexRef = useRef<number | undefined>(selectedModelIndex);
   const activeToolRef = useRef<string>(activeTool);
   const pendingMeasurePointRef = useRef<MeasurePoint | null>(pendingMeasurePoint);
   const activeMeasurementRef = useRef(activeMeasurement);
@@ -228,6 +286,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
   useEffect(() => { hiddenEntitiesRef.current = hiddenEntities; }, [hiddenEntities]);
   useEffect(() => { isolatedEntitiesRef.current = isolatedEntities; }, [isolatedEntities]);
   useEffect(() => { selectedEntityIdRef.current = selectedEntityId; }, [selectedEntityId]);
+  useEffect(() => { selectedModelIndexRef.current = selectedModelIndex; }, [selectedModelIndex]);
   useEffect(() => { activeToolRef.current = activeTool; }, [activeTool]);
   useEffect(() => { pendingMeasurePointRef.current = pendingMeasurePoint; }, [pendingMeasurePoint]);
   useEffect(() => { activeMeasurementRef.current = activeMeasurement; }, [activeMeasurement]);
@@ -381,6 +440,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
             hiddenIds: hiddenEntitiesRef.current,
             isolatedIds: isolatedEntitiesRef.current,
             selectedId: selectedEntityIdRef.current,
+            selectedModelIndex: selectedModelIndexRef.current,
             clearColor: clearColorRef.current,
             sectionPlane: activeToolRef.current === 'section' ? {
               ...sectionPlaneRef.current,
@@ -406,6 +466,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
             hiddenIds: hiddenEntitiesRef.current,
             isolatedIds: isolatedEntitiesRef.current,
             selectedId: selectedEntityIdRef.current,
+            selectedModelIndex: selectedModelIndexRef.current,
             clearColor: clearColorRef.current,
             sectionPlane: activeToolRef.current === 'section' ? {
               ...sectionPlaneRef.current,
@@ -421,6 +482,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
             hiddenIds: hiddenEntitiesRef.current,
             isolatedIds: isolatedEntitiesRef.current,
             selectedId: selectedEntityIdRef.current,
+            selectedModelIndex: selectedModelIndexRef.current,
             clearColor: clearColorRef.current,
             sectionPlane: activeToolRef.current === 'section' ? {
               ...sectionPlaneRef.current,
@@ -453,6 +515,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
             hiddenIds: hiddenEntitiesRef.current,
             isolatedIds: isolatedEntitiesRef.current,
             selectedId: selectedEntityIdRef.current,
+            selectedModelIndex: selectedModelIndexRef.current,
             clearColor: clearColorRef.current,
             sectionPlane: activeToolRef.current === 'section' ? {
               ...sectionPlaneRef.current,
@@ -501,6 +564,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
             hiddenIds: hiddenEntitiesRef.current,
             isolatedIds: isolatedEntitiesRef.current,
             selectedId: selectedEntityIdRef.current,
+            selectedModelIndex: selectedModelIndexRef.current,
             clearColor: clearColorRef.current,
             sectionPlane: activeToolRef.current === 'section' ? {
               ...sectionPlaneRef.current,
@@ -599,9 +663,9 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
 
           // Pick at cursor position - orbit around what user is clicking on
           // Uses visibility filtering so hidden elements don't affect orbit pivot
-          const pickedId = await renderer.pick(x, y, getPickOptions());
-          if (pickedId !== null) {
-            const center = getEntityCenter(geometryRef.current, pickedId);
+          const pickResult = await renderer.pick(x, y, getPickOptions());
+          if (pickResult !== null) {
+            const center = getEntityCenter(geometryRef.current, pickResult.expressId);
             if (center) {
               camera.setOrbitPivot(center);
             } else {
@@ -945,6 +1009,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
               hiddenIds: hiddenEntitiesRef.current,
               isolatedIds: isolatedEntitiesRef.current,
               selectedId: selectedEntityIdRef.current,
+            selectedModelIndex: selectedModelIndexRef.current,
               clearColor: clearColorRef.current,
               sectionPlane: activeToolRef.current === 'section' ? {
                 ...sectionPlaneRef.current,
@@ -965,6 +1030,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
                 hiddenIds: hiddenEntitiesRef.current,
                 isolatedIds: isolatedEntitiesRef.current,
                 selectedId: selectedEntityIdRef.current,
+            selectedModelIndex: selectedModelIndexRef.current,
                 clearColor: clearColorRef.current,
                 sectionPlane: activeToolRef.current === 'section' ? {
                   ...sectionPlaneRef.current,
@@ -984,9 +1050,9 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
           if (now - lastHoverCheckRef.current > hoverThrottleMs) {
             lastHoverCheckRef.current = now;
             // Uses visibility filtering so hidden elements don't show hover tooltips
-            const pickedId = await renderer.pick(x, y, getPickOptions());
-            if (pickedId) {
-              setHoverState({ entityId: pickedId, screenX: e.clientX, screenY: e.clientY });
+            const pickResult = await renderer.pick(x, y, getPickOptions());
+            if (pickResult) {
+              setHoverState({ entityId: pickResult.expressId, screenX: e.clientX, screenY: e.clientY });
             } else {
               clearHover();
             }
@@ -1037,8 +1103,8 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
         // Uses visibility filtering so hidden elements don't appear in context menu
-        const pickedId = await renderer.pick(x, y, getPickOptions());
-        openContextMenu(pickedId, e.clientX, e.clientY);
+        const pickResult = await renderer.pick(x, y, getPickOptions());
+        openContextMenu(pickResult?.expressId ?? null, e.clientX, e.clientY);
       });
 
       canvas.addEventListener('wheel', (e) => {
@@ -1051,6 +1117,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
           hiddenIds: hiddenEntitiesRef.current,
           isolatedIds: isolatedEntitiesRef.current,
           selectedId: selectedEntityIdRef.current,
+            selectedModelIndex: selectedModelIndexRef.current,
           clearColor: clearColorRef.current,
           sectionPlane: activeToolRef.current === 'section' ? {
             ...sectionPlaneRef.current,
@@ -1113,23 +1180,23 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
           Math.abs(clickPos.y - lastClickPosRef.current.y) < 5) {
           // Double-click - isolate element
           // Uses visibility filtering so only visible elements can be selected
-          const pickedId = await renderer.pick(x, y, getPickOptions());
-          if (pickedId) {
-            setSelectedEntityId(pickedId);
+          const pickResult = await renderer.pick(x, y, getPickOptions());
+          if (pickResult) {
+            handlePickForSelection(pickResult);
           }
           lastClickTimeRef.current = 0;
           lastClickPosRef.current = null;
         } else {
           // Single click - uses visibility filtering so only visible elements can be selected
-          const pickedId = await renderer.pick(x, y, getPickOptions());
+          const pickResult = await renderer.pick(x, y, getPickOptions());
 
           // Multi-selection with Ctrl/Cmd
           if (e.ctrlKey || e.metaKey) {
-            if (pickedId) {
-              toggleSelection(pickedId);
+            if (pickResult) {
+              toggleSelection(pickResult.expressId);
             }
           } else {
-            setSelectedEntityId(pickedId);
+            handlePickForSelection(pickResult);
           }
 
           lastClickTimeRef.current = now;
@@ -1167,9 +1234,9 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
           const y = touchState.touches[0].clientY - rect.top;
 
           // Uses visibility filtering so hidden elements don't affect orbit pivot
-          const pickedId = await renderer.pick(x, y, getPickOptions());
-          if (pickedId !== null) {
-            const center = getEntityCenter(geometryRef.current, pickedId);
+          const pickResult = await renderer.pick(x, y, getPickOptions());
+          if (pickResult !== null) {
+            const center = getEntityCenter(geometryRef.current, pickResult.expressId);
             if (center) {
               camera.setOrbitPivot(center);
             } else {
@@ -1205,6 +1272,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
             hiddenIds: hiddenEntitiesRef.current,
             isolatedIds: isolatedEntitiesRef.current,
             selectedId: selectedEntityIdRef.current,
+            selectedModelIndex: selectedModelIndexRef.current,
             clearColor: clearColorRef.current,
             sectionPlane: activeToolRef.current === 'section' ? {
               ...sectionPlaneRef.current,
@@ -1233,6 +1301,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
             hiddenIds: hiddenEntitiesRef.current,
             isolatedIds: isolatedEntitiesRef.current,
             selectedId: selectedEntityIdRef.current,
+            selectedModelIndex: selectedModelIndexRef.current,
             clearColor: clearColorRef.current,
             sectionPlane: activeToolRef.current === 'section' ? {
               ...sectionPlaneRef.current,
@@ -1270,6 +1339,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
             hiddenIds: hiddenEntitiesRef.current,
             isolatedIds: isolatedEntitiesRef.current,
             selectedId: selectedEntityIdRef.current,
+            selectedModelIndex: selectedModelIndexRef.current,
             clearColor: clearColorRef.current,
             sectionPlane: activeToolRef.current === 'section' ? {
               ...sectionPlaneRef.current,
@@ -1358,6 +1428,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
             hiddenIds: hiddenEntitiesRef.current,
             isolatedIds: isolatedEntitiesRef.current,
             selectedId: selectedEntityIdRef.current,
+            selectedModelIndex: selectedModelIndexRef.current,
             clearColor: clearColorRef.current,
             sectionPlane: activeToolRef.current === 'section' ? {
               ...sectionPlaneRef.current,
@@ -1383,6 +1454,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
           hiddenIds: hiddenEntitiesRef.current,
           isolatedIds: isolatedEntitiesRef.current,
           selectedId: selectedEntityIdRef.current,
+            selectedModelIndex: selectedModelIndexRef.current,
           clearColor: clearColorRef.current,
           sectionPlane: activeToolRef.current === 'section' ? {
             ...sectionPlaneRef.current,
@@ -1397,6 +1469,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
         hiddenIds: hiddenEntitiesRef.current,
         isolatedIds: isolatedEntitiesRef.current,
         selectedId: selectedEntityIdRef.current,
+            selectedModelIndex: selectedModelIndexRef.current,
         clearColor: clearColorRef.current,
         sectionPlane: activeToolRef.current === 'section' ? {
           ...sectionPlaneRef.current,
@@ -1489,20 +1562,14 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
     const isCleared = currentLength === 0;
 
     if (isCleared) {
-      // Geometry cleared - reset camera and bounds
+      // Geometry cleared (could be visibility change or file unload)
+      // Clear scene but DON'T reset camera - user may just be hiding models
       scene.clear();
       processedMeshIdsRef.current.clear();
-      cameraFittedRef.current = false;
-      finalBoundsRefittedRef.current = false;
+      // Keep cameraFittedRef to preserve camera position when models are shown again
       lastGeometryLengthRef.current = 0;
       lastGeometryRef.current = null;
-      // Reset camera state
-      renderer.getCamera().reset();
-      // Reset geometry bounds to default
-      geometryBoundsRef.current = {
-        min: { x: -100, y: -100, z: -100 },
-        max: { x: 100, y: 100, z: 100 },
-      };
+      // Note: Don't reset camera or bounds - preserve user's view
       return;
     } else if (isNewFile) {
       // New file loaded - reset camera and bounds
@@ -1520,20 +1587,35 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
         max: { x: 100, y: 100, z: 100 },
       };
     } else if (!isIncremental && currentLength !== lastLength) {
-      // Length decreased (shouldn't happen during streaming) - reset
-      scene.clear();
-      processedMeshIdsRef.current.clear();
-      cameraFittedRef.current = false;
-      finalBoundsRefittedRef.current = false;
-      lastGeometryLengthRef.current = 0;
-      lastGeometryRef.current = geometry;
-      // Reset camera state
-      renderer.getCamera().reset();
-      // Reset geometry bounds to default
-      geometryBoundsRef.current = {
-        min: { x: -100, y: -100, z: -100 },
-        max: { x: 100, y: 100, z: 100 },
-      };
+      // Length changed but not incremental - could be:
+      // 1. Length decreased (model hidden) - DON'T reset camera
+      // 2. Length increased but lastLength > 0 (new file loaded while another was open) - DO reset
+      const isLengthDecrease = currentLength < lastLength;
+
+      if (isLengthDecrease) {
+        // Model visibility changed (hidden) - rebuild scene but keep camera
+        scene.clear();
+        processedMeshIdsRef.current.clear();
+        // Don't reset cameraFittedRef - keep current camera position
+        lastGeometryLengthRef.current = 0; // Reset so meshes get re-added
+        lastGeometryRef.current = geometry;
+        // Note: Don't reset camera or bounds - user wants to keep their view
+      } else {
+        // New file loaded while another was open - full reset
+        scene.clear();
+        processedMeshIdsRef.current.clear();
+        cameraFittedRef.current = false;
+        finalBoundsRefittedRef.current = false;
+        lastGeometryLengthRef.current = 0;
+        lastGeometryRef.current = geometry;
+        // Reset camera state
+        renderer.getCamera().reset();
+        // Reset geometry bounds to default
+        geometryBoundsRef.current = {
+          min: { x: -100, y: -100, z: -100 },
+          max: { x: 100, y: 100, z: 100 },
+        };
+      }
     } else if (currentLength === lastLength) {
       // No geometry change - but check if we need to update bounds when streaming completes
       if (cameraFittedRef.current && !isStreaming && !finalBoundsRefittedRef.current && coordinateInfo?.shiftedBounds) {
@@ -1789,6 +1871,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
       isolatedIds: isolatedEntities,
       selectedId: selectedEntityId,
       selectedIds: selectedEntityIds,
+      selectedModelIndex,
       clearColor: clearColorRef.current,
       sectionPlane: activeTool === 'section' ? {
         ...sectionPlane,
@@ -1796,7 +1879,7 @@ export function Viewport({ geometry, coordinateInfo, computedIsolatedIds }: View
         max: sectionRange?.max,
       } : undefined,
     });
-  }, [hiddenEntities, isolatedEntities, selectedEntityId, selectedEntityIds, isInitialized, sectionPlane, activeTool, sectionRange]);
+  }, [hiddenEntities, isolatedEntities, selectedEntityId, selectedEntityIds, selectedModelIndex, isInitialized, sectionPlane, activeTool, sectionRange]);
 
   return (
     <canvas

@@ -35,6 +35,7 @@ export interface Material {
 
 export interface Mesh {
   expressId: number;
+  modelIndex?: number;  // Index of the model this mesh belongs to (for multi-model federation)
   vertexBuffer: GPUBuffer;
   indexBuffer: GPUBuffer;
   indexCount: number;
@@ -106,6 +107,7 @@ export interface RenderOptions {
   isolatedIds?: Set<number> | null; // Only show these meshes (null = show all)
   selectedId?: number | null;     // Currently selected mesh (for highlighting)
   selectedIds?: Set<number>;      // Multi-selection support
+  selectedModelIndex?: number;    // Model index for multi-model selection (must match mesh.modelIndex)
   // Section plane clipping
   sectionPlane?: SectionPlane;
   // Streaming state
@@ -122,4 +124,13 @@ export interface PickOptions {
   // Visibility filtering - same as RenderOptions for consistency
   hiddenIds?: Set<number>;        // Hidden elements (can't be picked)
   isolatedIds?: Set<number> | null; // Only these elements can be picked (null = all pickable)
+}
+
+/**
+ * Result from GPU picking
+ * For multi-model support, includes both expressId and modelIndex
+ */
+export interface PickResult {
+  expressId: number;
+  modelIndex?: number;  // Index of the model this entity belongs to
 }

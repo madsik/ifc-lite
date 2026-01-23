@@ -8,8 +8,8 @@
  */
 
 import { useMemo, useCallback, useRef } from 'react';
-import { useViewerStore } from '../store.js';
-import { IfcParser, detectFormat, parseIfcx, type IfcDataStore } from '@ifc-lite/parser';
+import { useViewerStore, type FederatedModel, type SchemaVersion } from '../store.js';
+import { IfcParser, detectFormat, parseIfcx, parseFederatedIfcx, type IfcDataStore, type FederatedIfcxParseResult } from '@ifc-lite/parser';
 import { GeometryProcessor, GeometryQuality, type MeshData, type CoordinateInfo } from '@ifc-lite/geometry';
 import { IfcQuery } from '@ifc-lite/query';
 import { buildSpatialIndex } from '@ifc-lite/spatial';
@@ -45,6 +45,22 @@ interface ServerQuantitySet {
   qset_name: string;
   method_of_measurement?: string;
   quantities: Array<{ quantity_name: string; quantity_value: number; quantity_type: string }>;
+}
+
+/**
+ * Extended data store type for IFCX (IFC5) files.
+ * IFCX uses schemaVersion 'IFC5' and may include federated composition metadata.
+ */
+interface IfcxDataStore extends Omit<IfcDataStore, 'schemaVersion'> {
+  schemaVersion: 'IFC5';
+  /** Federated layer info for re-composition */
+  _federatedLayers?: Array<{ id: string; name: string; enabled: boolean }>;
+  /** Original buffers for re-composition when adding overlays */
+  _federatedBuffers?: Array<{ buffer: ArrayBuffer; name: string }>;
+  /** Composition statistics */
+  _compositionStats?: { totalNodes: number; layersUsed: number; inheritanceResolutions: number; crossLayerReferences: number };
+  /** Layer info for display */
+  _layerInfo?: Array<{ id: string; name: string; meshCount: number }>;
 }
 
 /** Convert server mesh data (snake_case) to viewer format (camelCase) */
@@ -134,6 +150,24 @@ export function useIfc() {
     appendGeometryBatch,
     updateMeshColors,
     updateCoordinateInfo,
+    // Multi-model state and actions
+    models,
+    activeModelId,
+    addModel: storeAddModel,
+    removeModel: storeRemoveModel,
+    clearAllModels,
+    setActiveModel,
+    setModelVisibility,
+    setModelCollapsed,
+    getModel,
+    getActiveModel,
+    getAllVisibleModels,
+    hasModels,
+    // Federation Registry helpers
+    registerModelOffset,
+    toGlobalId,
+    fromGlobalId,
+    findModelForGlobalId,
   } = useViewerStore();
 
   // Track if we've already logged for this ifcDataStore
@@ -426,12 +460,13 @@ export function useIfc() {
           console.log(`  Spatial nodes: ${dataModel.spatialHierarchy.nodes.length}`);
 
           // Convert server data model to viewer data store format using utility
+          // ViewerDataStore is structurally compatible with IfcDataStore
           const dataStore = convertServerDataModel(
             dataModel,
             result as ServerParseResult,
             file,
             allMeshes
-          ) as any;
+          ) as unknown as IfcDataStore;
 
           setIfcDataStore(dataStore);
           console.log('[useIfc] ✅ Property panel ready with server data model');
@@ -447,7 +482,7 @@ export function useIfc() {
       const totalServerTime = performance.now() - serverStart;
       console.log(`[useIfc] SERVER PARALLEL complete: ${file.name}`);
       console.log(`  Total time: ${totalServerTime.toFixed(0)}ms`);
-      console.log(`  Breakdown: health=${(healthStart - serverStart).toFixed(0)}ms, parse=${parseTime.toFixed(0)}ms, convert=${convertTime.toFixed(0)}ms`);
+      console.log(`  Breakdown: parse=${parseTime.toFixed(0)}ms, convert=${convertTime.toFixed(0)}ms`);
 
       return true;
     } catch (err) {
@@ -457,14 +492,16 @@ export function useIfc() {
   }, [setProgress, setIfcDataStore, setGeometryResult]);
 
   const loadFile = useCallback(async (file: File) => {
-    const { resetViewerState } = useViewerStore.getState();
+    const { resetViewerState, clearAllModels } = useViewerStore.getState();
 
     // Track total elapsed time for complete user experience
     const totalStartTime = performance.now();
-    
+
     try {
       // Reset all viewer state before loading new file
+      // Also clear models Map to ensure clean single-file state
       resetViewerState();
+      clearAllModels();
 
       setLoading(true);
       setError(null);
@@ -511,6 +548,20 @@ export function useIfc() {
             };
           }).filter((m: MeshData) => m.positions.length > 0 && m.indices.length > 0); // Filter out empty meshes
 
+          // Check if this is an overlay-only file (no geometry)
+          if (meshes.length === 0) {
+            console.warn(`[useIfc] IFCX file "${file.name}" has no geometry - this appears to be an overlay file that adds properties to a base model.`);
+            console.warn('[useIfc] To use this file, load it together with a base IFCX file (select both files at once).');
+
+            // Check if file has data references that suggest it's an overlay
+            const hasReferences = ifcxResult.entityCount > 0;
+            if (hasReferences) {
+              setError(`"${file.name}" is an overlay file with no geometry. Please load it together with a base IFCX file (select all files at once).`);
+              setLoading(false);
+              return;
+            }
+          }
+
           // Calculate bounds and statistics
           const { bounds, stats } = calculateMeshBounds(meshes);
           const coordinateInfo = createCoordinateInfo(bounds);
@@ -540,9 +591,10 @@ export function useIfc() {
             quantities: ifcxResult.quantities,
             relationships: ifcxResult.relationships,
             spatialHierarchy: ifcxResult.spatialHierarchy,
-          } as any; // Type assertion - IFCX format is compatible but schemaVersion differs
+          } as IfcxDataStore;
 
-          setIfcDataStore(dataStore);
+          // Cast to IfcDataStore for store compatibility (IFC5 schema extension)
+          setIfcDataStore(dataStore as unknown as IfcDataStore);
 
           setProgress({ phase: 'Complete', percent: 100 });
           setLoading(false);
@@ -743,16 +795,16 @@ export function useIfc() {
                   const buildIndex = () => {
                     try {
                       const spatialIndex = buildSpatialIndex(allMeshes);
-                      (dataStore as any).spatialIndex = spatialIndex;
+                      dataStore.spatialIndex = spatialIndex;
                       setIfcDataStore({ ...dataStore });
                     } catch (err) {
                       console.warn('[useIfc] Failed to build spatial index:', err);
                     }
                   };
 
-                  // Use requestIdleCallback if available
+                  // Use requestIdleCallback if available (type assertion for optional browser API)
                   if ('requestIdleCallback' in window) {
-                    (window as any).requestIdleCallback(buildIndex, { timeout: 2000 });
+                    (window as { requestIdleCallback: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback(buildIndex, { timeout: 2000 });
                   } else {
                     setTimeout(buildIndex, 100);
                   }
@@ -796,6 +848,7 @@ export function useIfc() {
   }, [setLoading, setError, setProgress, setIfcDataStore, setGeometryResult, appendGeometryBatch, updateCoordinateInfo, loadFromCache, saveToCache]);
 
   // Memoize query to prevent recreation on every render
+  // For single-model backward compatibility
   const query = useMemo(() => {
     if (!ifcDataStore) return null;
 
@@ -805,7 +858,590 @@ export function useIfc() {
     return new IfcQuery(ifcDataStore);
   }, [ifcDataStore]);
 
+  /**
+   * Add a model to the federation (multi-model support)
+   * Uses FederationRegistry to assign unique ID offsets - BULLETPROOF against ID collisions
+   * Returns the model ID on success, null on failure
+   */
+  const addModel = useCallback(async (
+    file: File,
+    options?: { name?: string }
+  ): Promise<string | null> => {
+    const modelId = crypto.randomUUID();
+    const totalStartTime = performance.now();
+
+    try {
+      // IMPORTANT: Before adding a new model, check if there's a legacy model
+      // (loaded via loadFile) that's not in the Map yet. If so, migrate it first.
+      const currentModels = useViewerStore.getState().models;
+      const currentIfcDataStore = useViewerStore.getState().ifcDataStore;
+      const currentGeometryResult = useViewerStore.getState().geometryResult;
+
+      if (currentModels.size === 0 && currentIfcDataStore && currentGeometryResult) {
+        // Migrate the legacy model to the Map
+        // Legacy model has offset 0 (IDs are unchanged)
+        const legacyModelId = crypto.randomUUID();
+        const legacyName = currentIfcDataStore.spatialHierarchy?.project?.name || 'Model 1';
+
+        // Find max expressId in legacy model for registry
+        // IMPORTANT: Include ALL entities, not just meshes, for proper globalId resolution
+        const legacyMeshes = currentGeometryResult.meshes || [];
+        const legacyMaxExpressIdFromMeshes = legacyMeshes.reduce((max, m) => Math.max(max, m.expressId), 0);
+        const legacyMaxExpressIdFromEntities = currentIfcDataStore.entityIndex?.byId
+          ? Math.max(0, ...Array.from(currentIfcDataStore.entityIndex.byId.keys()))
+          : 0;
+        const legacyMaxExpressId = Math.max(legacyMaxExpressIdFromMeshes, legacyMaxExpressIdFromEntities);
+
+        // Register legacy model with offset 0 (IDs already in use as-is)
+        const legacyOffset = registerModelOffset(legacyModelId, legacyMaxExpressId);
+
+        const legacyModel: FederatedModel = {
+          id: legacyModelId,
+          name: legacyName,
+          ifcDataStore: currentIfcDataStore,
+          geometryResult: currentGeometryResult,
+          visible: true,
+          collapsed: false,
+          schemaVersion: 'IFC4',
+          loadedAt: Date.now() - 1000,
+          fileSize: 0,
+          idOffset: legacyOffset,
+          maxExpressId: legacyMaxExpressId,
+        };
+        storeAddModel(legacyModel);
+        console.log(`[useIfc] Migrated legacy model "${legacyModel.name}" to federation (offset: ${legacyOffset}, maxId: ${legacyMaxExpressId})`);
+      }
+
+      setLoading(true);
+      setError(null);
+      setProgress({ phase: 'Loading file', percent: 0 });
+
+      // Read file from disk
+      const buffer = await file.arrayBuffer();
+      const fileSizeMB = buffer.byteLength / (1024 * 1024);
+
+      // Detect file format
+      const format = detectFormat(buffer);
+
+      let parsedDataStore: IfcDataStore | null = null;
+      let parsedGeometry: { meshes: MeshData[]; totalVertices: number; totalTriangles: number; coordinateInfo: CoordinateInfo } | null = null;
+      let schemaVersion: SchemaVersion = 'IFC4';
+
+      // IFCX files must be parsed client-side
+      if (format === 'ifcx') {
+        setProgress({ phase: 'Parsing IFCX (client-side)', percent: 10 });
+
+        const ifcxResult = await parseIfcx(buffer, {
+          onProgress: (prog: { phase: string; percent: number }) => {
+            setProgress({ phase: `IFCX ${prog.phase}`, percent: 10 + (prog.percent * 0.8) });
+          },
+        });
+
+        // Convert IFCX meshes to viewer format
+        const meshes: MeshData[] = ifcxResult.meshes.map((m: { expressId?: number; express_id?: number; id?: number; positions: Float32Array | number[]; indices: Uint32Array | number[]; normals: Float32Array | number[]; color?: [number, number, number, number] | [number, number, number]; ifcType?: string; ifc_type?: string }) => {
+          const positions = m.positions instanceof Float32Array ? m.positions : new Float32Array(m.positions || []);
+          const indices = m.indices instanceof Uint32Array ? m.indices : new Uint32Array(m.indices || []);
+          const normals = m.normals instanceof Float32Array ? m.normals : new Float32Array(m.normals || []);
+          const color = normalizeColor(m.color);
+
+          return {
+            expressId: m.expressId || m.express_id || m.id || 0,
+            positions,
+            indices,
+            normals,
+            color,
+            ifcType: m.ifcType || m.ifc_type || 'IfcProduct',
+          };
+        }).filter((m: MeshData) => m.positions.length > 0 && m.indices.length > 0);
+
+        // Check if this is an overlay-only IFCX file (no geometry)
+        if (meshes.length === 0 && ifcxResult.entityCount > 0) {
+          console.warn(`[useIfc] IFCX file "${file.name}" has no geometry - this is an overlay file.`);
+          setError(`"${file.name}" is an overlay file with no geometry. Please load it together with a base IFCX file (select all files at once for federated loading).`);
+          setLoading(false);
+          return null;
+        }
+
+        const { bounds, stats } = calculateMeshBounds(meshes);
+        const coordinateInfo = createCoordinateInfo(bounds);
+
+        parsedGeometry = {
+          meshes,
+          totalVertices: stats.totalVertices,
+          totalTriangles: stats.totalTriangles,
+          coordinateInfo,
+        };
+
+        parsedDataStore = {
+          fileSize: ifcxResult.fileSize,
+          schemaVersion: 'IFC5' as const,
+          entityCount: ifcxResult.entityCount,
+          parseTime: ifcxResult.parseTime,
+          source: new Uint8Array(buffer),
+          entityIndex: { byId: new Map(), byType: new Map() },
+          strings: ifcxResult.strings,
+          entities: ifcxResult.entities,
+          properties: ifcxResult.properties,
+          quantities: ifcxResult.quantities,
+          relationships: ifcxResult.relationships,
+          spatialHierarchy: ifcxResult.spatialHierarchy,
+        } as unknown as IfcDataStore; // IFC5 schema extension
+
+        schemaVersion = 'IFC5';
+
+      } else {
+        // IFC4/IFC2X3 STEP format - use WASM parsing
+        setProgress({ phase: 'Starting geometry streaming', percent: 10 });
+
+        const geometryProcessor = new GeometryProcessor({ quality: GeometryQuality.Balanced });
+        await geometryProcessor.init();
+
+        // Parse data model
+        const parser = new IfcParser();
+        const wasmApi = geometryProcessor.getApi();
+
+        const dataStorePromise = parser.parseColumnar(buffer, { wasmApi });
+
+        // Process geometry
+        const allMeshes: MeshData[] = [];
+        let finalCoordinateInfo: CoordinateInfo | null = null;
+
+        const dynamicBatchConfig = getDynamicBatchConfig(fileSizeMB);
+
+        for await (const event of geometryProcessor.processAdaptive(new Uint8Array(buffer), {
+          sizeThreshold: 2 * 1024 * 1024,
+          batchSize: dynamicBatchConfig,
+        })) {
+          switch (event.type) {
+            case 'batch': {
+              allMeshes.push(...event.meshes);
+              finalCoordinateInfo = event.coordinateInfo ?? null;
+              const progressPercent = 10 + Math.min(80, (allMeshes.length / 1000) * 0.8);
+              setProgress({ phase: `Processing geometry (${allMeshes.length} meshes)`, percent: progressPercent });
+              break;
+            }
+            case 'complete':
+              finalCoordinateInfo = event.coordinateInfo ?? null;
+              break;
+          }
+        }
+
+        parsedDataStore = await dataStorePromise;
+
+        // Calculate storey heights
+        if (parsedDataStore.spatialHierarchy && parsedDataStore.spatialHierarchy.storeyHeights.size === 0 && parsedDataStore.spatialHierarchy.storeyElevations.size > 1) {
+          const calculatedHeights = calculateStoreyHeights(parsedDataStore.spatialHierarchy.storeyElevations);
+          for (const [storeyId, height] of calculatedHeights) {
+            parsedDataStore.spatialHierarchy.storeyHeights.set(storeyId, height);
+          }
+        }
+
+        // Build spatial index
+        if (allMeshes.length > 0) {
+          try {
+            const spatialIndex = buildSpatialIndex(allMeshes);
+            parsedDataStore.spatialIndex = spatialIndex;
+          } catch (err) {
+            console.warn('[useIfc] Failed to build spatial index:', err);
+          }
+        }
+
+        parsedGeometry = {
+          meshes: allMeshes,
+          totalVertices: allMeshes.reduce((sum, m) => sum + m.positions.length / 3, 0),
+          totalTriangles: allMeshes.reduce((sum, m) => sum + m.indices.length / 3, 0),
+          coordinateInfo: finalCoordinateInfo || createCoordinateInfo(calculateMeshBounds(allMeshes).bounds),
+        };
+
+        schemaVersion = parsedDataStore.schemaVersion === 'IFC4X3' ? 'IFC4X3' :
+                        parsedDataStore.schemaVersion === 'IFC4' ? 'IFC4' : 'IFC2X3';
+      }
+
+      if (!parsedDataStore || !parsedGeometry) {
+        throw new Error('Failed to parse file');
+      }
+
+      // =========================================================================
+      // FEDERATION REGISTRY: Transform expressIds to globally unique IDs
+      // This is the BULLETPROOF fix for multi-model ID collisions
+      // =========================================================================
+
+      // Step 1: Find max expressId in this model
+      // IMPORTANT: Use ALL entities from data store, not just meshes
+      // Spatial containers (IfcProject, IfcSite, etc.) don't have geometry but need valid globalId resolution
+      const maxExpressIdFromMeshes = parsedGeometry.meshes.reduce((max, m) => Math.max(max, m.expressId), 0);
+      const maxExpressIdFromEntities = parsedDataStore.entityIndex?.byId
+        ? Math.max(0, ...Array.from(parsedDataStore.entityIndex.byId.keys()))
+        : 0;
+      const maxExpressId = Math.max(maxExpressIdFromMeshes, maxExpressIdFromEntities);
+
+      // Step 2: Register with federation registry to get unique offset
+      const idOffset = registerModelOffset(modelId, maxExpressId);
+
+      // Step 3: Transform ALL mesh expressIds to globalIds
+      // globalId = originalExpressId + offset
+      // This ensures no two models can have the same ID
+      if (idOffset > 0) {
+        for (const mesh of parsedGeometry.meshes) {
+          mesh.expressId = mesh.expressId + idOffset;
+        }
+      }
+
+      // Create the federated model with offset info
+      const federatedModel: FederatedModel = {
+        id: modelId,
+        name: options?.name ?? file.name,
+        ifcDataStore: parsedDataStore,
+        geometryResult: parsedGeometry,
+        visible: true,
+        collapsed: hasModels(), // Collapse if not first model
+        schemaVersion,
+        loadedAt: Date.now(),
+        fileSize: buffer.byteLength,
+        idOffset,
+        maxExpressId,
+      };
+
+      // Add to store
+      storeAddModel(federatedModel);
+
+      // Also set legacy single-model state for backward compatibility
+      setIfcDataStore(parsedDataStore);
+      setGeometryResult(parsedGeometry);
+
+      setProgress({ phase: 'Complete', percent: 100 });
+      setLoading(false);
+
+      const totalElapsedMs = performance.now() - totalStartTime;
+      console.log(`[useIfc] ✓ Added model ${file.name} (${fileSizeMB.toFixed(1)}MB) | ${totalElapsedMs.toFixed(0)}ms`);
+
+      return modelId;
+
+    } catch (err) {
+      console.error('[useIfc] addModel failed:', err);
+      setError(err instanceof Error ? err.message : 'Unknown error');
+      setLoading(false);
+      return null;
+    }
+  }, [setLoading, setError, setProgress, setIfcDataStore, setGeometryResult, storeAddModel, hasModels]);
+
+  /**
+   * Remove a model from the federation
+   */
+  const removeModel = useCallback((modelId: string) => {
+    storeRemoveModel(modelId);
+
+    // Read fresh state from store after removal to avoid stale closure
+    const freshModels = useViewerStore.getState().models;
+    const remaining = Array.from(freshModels.values());
+    if (remaining.length > 0) {
+      const newActive = remaining[0];
+      setIfcDataStore(newActive.ifcDataStore);
+      setGeometryResult(newActive.geometryResult);
+    } else {
+      setIfcDataStore(null);
+      setGeometryResult(null);
+    }
+  }, [storeRemoveModel, setIfcDataStore, setGeometryResult]);
+
+  /**
+   * Get query instance for a specific model
+   */
+  const getQueryForModel = useCallback((modelId: string): IfcQuery | null => {
+    const model = getModel(modelId);
+    if (!model) return null;
+    return new IfcQuery(model.ifcDataStore);
+  }, [getModel]);
+
+  /**
+   * Load multiple files sequentially (WASM parser isn't thread-safe)
+   * Each file fully loads before the next one starts
+   */
+  const loadFilesSequentially = useCallback(async (files: File[]): Promise<void> => {
+    for (const file of files) {
+      await addModel(file);
+    }
+  }, [addModel]);
+
+  /**
+   * Load multiple IFCX files as federated layers
+   * Uses IFC5's layer composition system where later files override earlier ones.
+   * Properties from overlay files are merged with the base file(s).
+   *
+   * @param files - Array of IFCX files (first = base/weakest, last = strongest overlay)
+   *
+   * @example
+   * ```typescript
+   * // Load base model with property overlay
+   * await loadFederatedIfcx([
+   *   baseFile,           // hello-wall.ifcx
+   *   fireRatingFile,     // add-fire-rating.ifcx (adds FireRating property)
+   * ]);
+   * ```
+   */
+  /**
+   * Internal: Load federated IFCX from buffers (used by both initial load and add overlay)
+   */
+  const loadFederatedIfcxFromBuffers = useCallback(async (
+    buffers: Array<{ buffer: ArrayBuffer; name: string }>,
+    options: { resetState?: boolean } = {}
+  ): Promise<void> => {
+    const { resetViewerState, clearAllModels } = useViewerStore.getState();
+
+    try {
+      // Always reset viewer state when geometry changes (selection, hidden entities, etc.)
+      // This ensures 3D highlighting works correctly after re-composition
+      resetViewerState();
+
+      // Clear legacy geometry BEFORE clearing models to prevent stale fallback
+      // This avoids a race condition where mergedGeometryResult uses old geometry
+      // during the brief moment when storeModels.size === 0
+      setGeometryResult(null);
+      clearAllModels();
+
+      setLoading(true);
+      setError(null);
+      setProgress({ phase: 'Parsing federated IFCX', percent: 0 });
+
+      // Parse federated IFCX files
+      const result = await parseFederatedIfcx(buffers, {
+        onProgress: (prog: { phase: string; percent: number }) => {
+          setProgress({ phase: `IFCX ${prog.phase}`, percent: prog.percent });
+        },
+      });
+
+      // Convert IFCX meshes to viewer format
+      const meshes: MeshData[] = result.meshes.map((m: { expressId?: number; express_id?: number; id?: number; positions: Float32Array | number[]; indices: Uint32Array | number[]; normals: Float32Array | number[]; color?: [number, number, number, number] | [number, number, number]; ifcType?: string; ifc_type?: string }) => {
+        const positions = m.positions instanceof Float32Array ? m.positions : new Float32Array(m.positions || []);
+        const indices = m.indices instanceof Uint32Array ? m.indices : new Uint32Array(m.indices || []);
+        const normals = m.normals instanceof Float32Array ? m.normals : new Float32Array(m.normals || []);
+        const color = normalizeColor(m.color);
+
+        return {
+          expressId: m.expressId || m.express_id || m.id || 0,
+          positions,
+          indices,
+          normals,
+          color,
+          ifcType: m.ifcType || m.ifc_type || 'IfcProduct',
+        };
+      }).filter((m: MeshData) => m.positions.length > 0 && m.indices.length > 0);
+
+      // Calculate bounds
+      const { bounds, stats } = calculateMeshBounds(meshes);
+      const coordinateInfo = createCoordinateInfo(bounds);
+
+      const geometryResult = {
+        meshes,
+        totalVertices: stats.totalVertices,
+        totalTriangles: stats.totalTriangles,
+        coordinateInfo,
+      };
+
+      // NOTE: Do NOT call setGeometryResult() here!
+      // For federated loading, geometry comes from the models Map via mergedGeometryResult.
+      // Calling setGeometryResult() before models are added causes a race condition where
+      // meshes are added to the scene WITHOUT modelIndex, breaking selection highlighting.
+
+      // Get layer info with mesh counts
+      const layers = result.layerStack.getLayers();
+
+      // Create data store from federated result
+      const dataStore = {
+        fileSize: result.fileSize,
+        schemaVersion: 'IFC5' as const,
+        entityCount: result.entityCount,
+        parseTime: result.parseTime,
+        source: new Uint8Array(buffers[0].buffer),
+        entityIndex: {
+          byId: new Map(),
+          byType: new Map(),
+        },
+        strings: result.strings,
+        entities: result.entities,
+        properties: result.properties,
+        quantities: result.quantities,
+        relationships: result.relationships,
+        spatialHierarchy: result.spatialHierarchy,
+        // Federated-specific: store layer info and ORIGINAL BUFFERS for re-composition
+        _federatedLayers: layers.map(l => ({
+          id: l.id,
+          name: l.name,
+          enabled: l.enabled,
+        })),
+        _federatedBuffers: buffers.map(b => ({
+          buffer: b.buffer.slice(0), // Clone buffer
+          name: b.name,
+        })),
+        _compositionStats: result.compositionStats,
+      } as unknown as IfcDataStore; // IFC5 schema extension
+
+      setIfcDataStore(dataStore);
+
+      // Clear existing models and add each layer as a "model" in the Models panel
+      // This shows users all the files that contributed to the composition
+      clearAllModels();
+
+      // Find max expressId for proper ID range tracking
+      // This is needed for resolveGlobalIdFromModels to work correctly
+      let maxExpressId = 0;
+      if (result.entities?.expressId) {
+        for (let i = 0; i < result.entities.count; i++) {
+          const id = result.entities.expressId[i];
+          if (id > maxExpressId) maxExpressId = id;
+        }
+      }
+
+      for (let i = 0; i < layers.length; i++) {
+        const layer = layers[i];
+        const layerBuffer = buffers.find(b => b.name === layer.name);
+
+        // Count how many meshes came from this layer
+        // For base layers: count meshes, for overlays: show as data-only
+        const isBaseLayer = i === layers.length - 1; // Last layer (weakest) is typically base
+
+        const layerModel: FederatedModel = {
+          id: layer.id,
+          name: layer.name,
+          ifcDataStore: dataStore, // Share the composed data store
+          geometryResult: isBaseLayer ? geometryResult : {
+            meshes: [],
+            totalVertices: 0,
+            totalTriangles: 0,
+            coordinateInfo,
+          },
+          visible: true,
+          collapsed: i > 0, // Collapse overlays by default
+          schemaVersion: 'IFC5',
+          loadedAt: Date.now() - (layers.length - i) * 100, // Stagger timestamps
+          fileSize: layerBuffer?.buffer.byteLength || 0,
+          // For base layer: set proper ID range for resolveGlobalIdFromModels
+          // Overlays share the same data store so they don't need their own range
+          idOffset: 0,
+          maxExpressId: isBaseLayer ? maxExpressId : 0,
+          // Mark overlay-only layers
+          _isOverlay: !isBaseLayer,
+          _layerIndex: i,
+        } as FederatedModel & { _isOverlay?: boolean; _layerIndex?: number };
+
+        storeAddModel(layerModel);
+      }
+
+      console.log(`[useIfc] Federated IFCX loaded: ${layers.length} layers, ${result.entityCount} entities, ${meshes.length} meshes`);
+      console.log(`[useIfc] Composition stats: ${result.compositionStats.inheritanceResolutions} inheritance resolutions, ${result.compositionStats.crossLayerReferences} cross-layer refs`);
+      console.log(`[useIfc] Layers in Models panel: ${layers.map(l => l.name).join(', ')}`);
+
+      setProgress({ phase: 'Complete', percent: 100 });
+      setLoading(false);
+    } catch (err: unknown) {
+      console.error('[useIfc] Federated IFCX loading failed:', err);
+      const message = err instanceof Error ? err.message : String(err);
+      setError(`Federated IFCX loading failed: ${message}`);
+      setLoading(false);
+    }
+  }, [setLoading, setError, setProgress, setGeometryResult, setIfcDataStore, storeAddModel, clearAllModels]);
+
+  const loadFederatedIfcx = useCallback(async (files: File[]): Promise<void> => {
+    if (files.length === 0) {
+      setError('No files provided for federated loading');
+      return;
+    }
+
+    // Check that all files are IFCX format and read buffers
+    const buffers: Array<{ buffer: ArrayBuffer; name: string }> = [];
+    for (const file of files) {
+      const buffer = await file.arrayBuffer();
+      const format = detectFormat(buffer);
+      if (format !== 'ifcx') {
+        setError(`File "${file.name}" is not an IFCX file. Federated loading only supports IFCX files.`);
+        return;
+      }
+      buffers.push({ buffer, name: file.name });
+    }
+
+    await loadFederatedIfcxFromBuffers(buffers);
+  }, [setError, loadFederatedIfcxFromBuffers]);
+
+  /**
+   * Add IFCX overlay files to existing federated model
+   * Re-composes all layers including new overlays
+   * Also handles adding overlays to a single IFCX file that wasn't loaded via federated loading
+   */
+  const addIfcxOverlays = useCallback(async (files: File[]): Promise<void> => {
+    const currentStore = useViewerStore.getState().ifcDataStore as IfcxDataStore | null;
+    const currentModels = useViewerStore.getState().models;
+
+    // Get existing buffers - either from federated loading or from single file load
+    let existingBuffers: Array<{ buffer: ArrayBuffer; name: string }> = [];
+
+    if (currentStore?._federatedBuffers) {
+      // Already federated - use stored buffers
+      existingBuffers = currentStore._federatedBuffers as Array<{ buffer: ArrayBuffer; name: string }>;
+    } else if (currentStore?.source && currentStore.schemaVersion === 'IFC5') {
+      // Single IFCX file loaded via loadFile() - reconstruct buffer from source
+      // Get the model name from the models map
+      let modelName = 'base.ifcx';
+      for (const [, model] of currentModels) {
+        // Compare object identity (cast needed due to IFC5 schema extension)
+        if ((model.ifcDataStore as unknown) === currentStore || model.schemaVersion === 'IFC5') {
+          modelName = model.name;
+          break;
+        }
+      }
+
+      // Convert Uint8Array source back to ArrayBuffer
+      const sourceBuffer = currentStore.source.buffer.slice(
+        currentStore.source.byteOffset,
+        currentStore.source.byteOffset + currentStore.source.byteLength
+      ) as ArrayBuffer;
+
+      existingBuffers = [{ buffer: sourceBuffer, name: modelName }];
+      console.log(`[useIfc] Converting single IFCX file "${modelName}" to federated mode`);
+    } else {
+      setError('Cannot add overlays: no IFCX model loaded');
+      return;
+    }
+
+    // Read new overlay buffers
+    const newBuffers: Array<{ buffer: ArrayBuffer; name: string }> = [];
+    for (const file of files) {
+      const buffer = await file.arrayBuffer();
+      const format = detectFormat(buffer);
+      if (format !== 'ifcx') {
+        setError(`File "${file.name}" is not an IFCX file.`);
+        return;
+      }
+      newBuffers.push({ buffer, name: file.name });
+    }
+
+    // Combine: existing layers + new overlays (new overlays are strongest = first in array)
+    const allBuffers = [...newBuffers, ...existingBuffers];
+
+    console.log(`[useIfc] Re-composing federated IFCX with ${newBuffers.length} new overlay(s)`);
+    console.log(`[useIfc] Total layers: ${allBuffers.length} (${existingBuffers.length} existing + ${newBuffers.length} new)`);
+
+    await loadFederatedIfcxFromBuffers(allBuffers, { resetState: false });
+  }, [setError, loadFederatedIfcxFromBuffers]);
+
+  /**
+   * Find which model contains a given globalId
+   * Uses FederationRegistry for O(log N) lookup - BULLETPROOF
+   * Returns the modelId or null if not found
+   */
+  const findModelForEntity = useCallback((globalId: number): string | null => {
+    return findModelForGlobalId(globalId);
+  }, [findModelForGlobalId]);
+
+  /**
+   * Convert a globalId back to the original (modelId, expressId) pair
+   * Use this when you need to look up properties in the IfcDataStore
+   */
+  const resolveGlobalId = useCallback((globalId: number): { modelId: string; expressId: number } | null => {
+    return fromGlobalId(globalId);
+  }, [fromGlobalId]);
+
   return {
+    // Legacy single-model API (backward compatibility)
     loading,
     progress,
     error,
@@ -813,5 +1449,30 @@ export function useIfc() {
     geometryResult,
     query,
     loadFile,
+
+    // Multi-model API
+    models,
+    activeModelId,
+    addModel,
+    removeModel,
+    clearAllModels,
+    setActiveModel,
+    setModelVisibility,
+    setModelCollapsed,
+    getModel,
+    getActiveModel,
+    getAllVisibleModels,
+    hasModels,
+    getQueryForModel,
+    loadFilesSequentially,
+
+    // Federated IFCX API (IFC5 multi-file loading with layer composition)
+    loadFederatedIfcx,  // Load multiple IFCX files as federated layers
+    addIfcxOverlays,    // Add overlay files to existing federated model
+
+    // Federation Registry helpers
+    findModelForEntity,  // Find model by globalId
+    resolveGlobalId,     // Convert globalId -> (modelId, originalExpressId)
+    toGlobalId,          // Convert (modelId, expressId) -> globalId
   };
 }

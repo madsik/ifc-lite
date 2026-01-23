@@ -89,10 +89,19 @@ export class Scene {
    * Get MeshData by expressId (for lazy buffer creation)
    * Returns merged MeshData if element has multiple pieces with same color,
    * or first piece if colors differ (to preserve correct per-piece colors)
+   * @param expressId - The expressId to look up
+   * @param modelIndex - Optional modelIndex to filter by (for multi-model support)
    */
-  getMeshData(expressId: number): MeshData | undefined {
-    const pieces = this.meshDataMap.get(expressId);
+  getMeshData(expressId: number, modelIndex?: number): MeshData | undefined {
+    let pieces = this.meshDataMap.get(expressId);
     if (!pieces || pieces.length === 0) return undefined;
+
+    // Filter by modelIndex if provided (for multi-model support)
+    if (modelIndex !== undefined) {
+      pieces = pieces.filter(p => p.modelIndex === modelIndex);
+      if (pieces.length === 0) return undefined;
+    }
+
     if (pieces.length === 1) return pieces[0];
 
     // Check if all pieces have the same color (within tolerance)
@@ -150,6 +159,7 @@ export class Scene {
     // Return merged MeshData (all pieces have same color)
     return {
       expressId,
+      modelIndex: pieces[0].modelIndex,  // Preserve modelIndex for multi-model support
       positions: mergedPositions,
       normals: mergedNormals,
       indices: mergedIndices,
@@ -160,9 +170,15 @@ export class Scene {
 
   /**
    * Check if MeshData exists for an expressId
+   * @param expressId - The expressId to look up
+   * @param modelIndex - Optional modelIndex to filter by (for multi-model support)
    */
-  hasMeshData(expressId: number): boolean {
-    return this.meshDataMap.has(expressId);
+  hasMeshData(expressId: number, modelIndex?: number): boolean {
+    const pieces = this.meshDataMap.get(expressId);
+    if (!pieces || pieces.length === 0) return false;
+    if (modelIndex === undefined) return true;
+    // Check if any piece matches the modelIndex
+    return pieces.some(p => p.modelIndex === modelIndex);
   }
 
   /**
@@ -765,14 +781,15 @@ export class Scene {
 
   /**
    * CPU raycast against all mesh data
-   * Returns expressId of closest hit or null
+   * Returns expressId and modelIndex of closest hit, or null
+   * For multi-model support: tracks which model's geometry was hit
    */
   raycast(
     rayOrigin: Vec3,
     rayDir: Vec3,
     hiddenIds?: Set<number>,
     isolatedIds?: Set<number> | null
-  ): { expressId: number; distance: number } | null {
+  ): { expressId: number; distance: number; modelIndex?: number } | null {
     // Precompute ray direction inverse and signs for box tests
     const rayDirInv: Vec3 = {
       x: rayDir.x !== 0 ? 1.0 / rayDir.x : Infinity,
@@ -785,7 +802,7 @@ export class Scene {
       rayDirInv.z < 0 ? 1 : 0,
     ];
 
-    let closestHit: { expressId: number; distance: number } | null = null;
+    let closestHit: { expressId: number; distance: number; modelIndex?: number } | null = null;
     let closestDistance = Infinity;
 
     // First pass: filter by bounding box (fast)
@@ -827,7 +844,8 @@ export class Scene {
           const t = this.rayTriangleIntersect(rayOrigin, rayDir, v0, v1, v2);
           if (t !== null && t < closestDistance) {
             closestDistance = t;
-            closestHit = { expressId, distance: t };
+            // Track modelIndex from the piece that was actually hit
+            closestHit = { expressId, distance: t, modelIndex: piece.modelIndex };
           }
         }
       }
