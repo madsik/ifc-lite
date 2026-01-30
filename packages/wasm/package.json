@@ -22,8 +22,10 @@
   "exports": {
     ".": {
       "import": "./pkg/ifc-lite.js",
+      "require": "./pkg/ifc-lite.js",
       "types": "./pkg/ifc-lite.d.ts"
-    }
+    },
+    "./pkg/ifc-lite_bg.wasm": "./pkg/ifc-lite_bg.wasm"
   },
   "sideEffects": false,
   "keywords": [

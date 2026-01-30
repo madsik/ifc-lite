@@ -25,15 +25,15 @@ import {
 
 type IfcInput = ArrayBuffer | Uint8Array | string;
 
-async function readIfcInput(input: IfcInput): Promise<ArrayBuffer> {
+async function readIfcInput(input: IfcInput): Promise<Uint8Array> {
   if (typeof input === 'string') {
     // Node-only path reading (dynamic import so browser bundles don't include fs)
     const fs = await import('node:fs/promises');
-    return await fs.readFile(input);
+    const buf = await fs.readFile(input);
+    return new Uint8Array(buf);
   }
-  if (input instanceof ArrayBuffer) return input;
-  // Uint8Array view
-  return input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength);
+  if (input instanceof ArrayBuffer) return new Uint8Array(input);
+  return input;
 }
 
 type Index = { byId: Map<number, EntityRef>; byType: Map<string, number[]> };
@@ -84,8 +84,7 @@ function isCandidateElementType(typeUpper: string): boolean {
 }
 
 export async function generateLod0(input: IfcInput): Promise<Lod0Json> {
-  const buffer = await readIfcInput(input);
-  const source = new Uint8Array(buffer);
+  const source = await readIfcInput(input);
   const entityIndex = buildEntityIndex(source);
   const unitScale = extractLengthUnitScale(source, entityIndex);
   const extractor = new EntityExtractor(source);

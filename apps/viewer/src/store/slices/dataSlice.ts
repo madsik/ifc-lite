@@ -9,13 +9,24 @@
 import type { StateCreator } from 'zustand';
 import type { IfcDataStore } from '@ifc-lite/parser';
 import type { GeometryResult, CoordinateInfo } from '@ifc-lite/geometry';
+import type { Lod0Json, Lod1MetaJson } from '@ifc-lite/export';
 import { DATA_DEFAULTS } from '../constants.js';
+
+export type ViewerGeometryMode = 'lod0' | 'lod1';
 
 export interface DataSlice {
   // State
   ifcDataStore: IfcDataStore | null;
   geometryResult: GeometryResult | null;
   pendingColorUpdates: Map<number, [number, number, number, number]> | null;
+
+  // LOD artifact state (optional)
+  lod0Preview: Lod0Json | null;
+  lod1Glb: Uint8Array | null;
+  lod1Meta: Lod1MetaJson | null;
+  geometryMode: ViewerGeometryMode;
+  /** If true, user explicitly picked a mode (no auto-switch) */
+  geometryModeLocked: boolean;
 
   // Actions
   setIfcDataStore: (result: IfcDataStore | null) => void;
@@ -24,6 +35,11 @@ export interface DataSlice {
   updateMeshColors: (updates: Map<number, [number, number, number, number]>) => void;
   clearPendingColorUpdates: () => void;
   updateCoordinateInfo: (coordinateInfo: CoordinateInfo) => void;
+
+  // LOD artifact actions
+  setLod0Preview: (lod0: Lod0Json | null) => void;
+  setLod1Artifacts: (result: { glb?: Uint8Array | null; meta?: Lod1MetaJson | null }) => void;
+  setGeometryMode: (mode: ViewerGeometryMode, locked?: boolean) => void;
 }
 
 const getDefaultCoordinateInfo = (): CoordinateInfo => ({
@@ -45,6 +61,12 @@ export const createDataSlice: StateCreator<DataSlice, [], [], DataSlice> = (set)
   ifcDataStore: null,
   geometryResult: null,
   pendingColorUpdates: null,
+
+  lod0Preview: null,
+  lod1Glb: null,
+  lod1Meta: null,
+  geometryMode: 'lod0',
+  geometryModeLocked: false,
 
   // Actions
   setIfcDataStore: (ifcDataStore) => set({ ifcDataStore }),
@@ -108,5 +130,17 @@ export const createDataSlice: StateCreator<DataSlice, [], [], DataSlice> = (set)
         coordinateInfo,
       },
     };
+  }),
+
+  setLod0Preview: (lod0Preview) => set({ lod0Preview }),
+
+  setLod1Artifacts: ({ glb, meta }) => set((state) => ({
+    lod1Glb: glb !== undefined ? glb : state.lod1Glb,
+    lod1Meta: meta !== undefined ? meta : state.lod1Meta,
+  })),
+
+  setGeometryMode: (geometryMode, locked = true) => set({
+    geometryMode,
+    geometryModeLocked: locked,
   }),
 });

@@ -1,0 +1,133 @@
+{
+  "schema": "ifc-lite-geometry",
+  "lod": 0,
+  "units": "m",
+  "elements": [
+    {
+      "expressID": 20,
+      "globalId": null,
+      "ifcClass": "IfcSite",
+      "name": null,
+      "transform": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "bbox": {
+        "min": [
+          -0.1,
+          -0.1,
+          -0.1
+        ],
+        "max": [
+          0.1,
+          0.1,
+          0.1
+        ]
+      },
+      "centroid": [
+        0,
+        0,
+        0
+      ],
+      "bbox_source": "fallback"
+    },
+    {
+      "expressID": 21,
+      "globalId": ".ELEMENT.",
+      "ifcClass": "IfcBuilding",
+      "name": null,
+      "transform": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "bbox": {
+        "min": [
+          -0.1,
+          -0.1,
+          -0.1
+        ],
+        "max": [
+          0.1,
+          0.1,
+          0.1
+        ]
+      },
+      "centroid": [
+        0,
+        0,
+        0
+      ],
+      "bbox_source": "fallback"
+    },
+    {
+      "expressID": 40,
+      "globalId": null,
+      "ifcClass": "IfcWall",
+      "name": null,
+      "transform": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "bbox": {
+        "min": [
+          -0.1,
+          -0.1,
+          -0.1
+        ],
+        "max": [
+          0.1,
+          0.1,
+          0.1
+        ]
+      },
+      "centroid": [
+        0,
+        0,
+        0
+      ],
+      "bbox_source": "fallback"
+    }
+  ]
+}

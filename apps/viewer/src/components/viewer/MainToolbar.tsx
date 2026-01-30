@@ -137,7 +137,8 @@ interface MainToolbarProps {
 export function MainToolbar({ onShowShortcuts }: MainToolbarProps = {} as MainToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const addModelInputRef = useRef<HTMLInputElement>(null);
-  const { loadFile, loading, progress, geometryResult, ifcDataStore, models, clearAllModels, loadFilesSequentially, loadFederatedIfcx, addIfcxOverlays, addModel } = useIfc();
+  const lodArtifactsInputRef = useRef<HTMLInputElement>(null);
+  const { loadFile, loadLodArtifacts, applyGeometryMode, loading, progress, geometryResult, ifcDataStore, models, clearAllModels, loadFilesSequentially, loadFederatedIfcx, addIfcxOverlays, addModel } = useIfc();
 
   // Check if we have models loaded (for showing add model button)
   const hasModelsLoaded = models.size > 0 || (geometryResult?.meshes && geometryResult.meshes.length > 0);
@@ -157,6 +158,10 @@ export function MainToolbar({ onShowShortcuts }: MainToolbarProps = {} as MainTo
   const typeVisibility = useViewerStore((state) => state.typeVisibility);
   const toggleTypeVisibility = useViewerStore((state) => state.toggleTypeVisibility);
   const resetViewerState = useViewerStore((state) => state.resetViewerState);
+  const geometryMode = useViewerStore((state) => state.geometryMode);
+  const lod0Preview = useViewerStore((state) => state.lod0Preview);
+  const lod1Glb = useViewerStore((state) => state.lod1Glb);
+  const lod1Meta = useViewerStore((state) => state.lod1Meta);
 
   // Check which type geometries exist
   const typeGeometryExists = useMemo(() => {
@@ -206,6 +211,13 @@ export function MainToolbar({ onShowShortcuts }: MainToolbarProps = {} as MainTo
     // Reset input so same files can be selected again
     e.target.value = '';
   }, [loadFile, loadFilesSequentially, loadFederatedIfcx, resetViewerState, clearAllModels]);
+
+  const handleLodArtifactsSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    loadLodArtifacts(Array.from(files));
+    e.target.value = '';
+  }, [loadLodArtifacts]);
 
   const handleAddModelSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -371,6 +383,14 @@ export function MainToolbar({ onShowShortcuts }: MainToolbarProps = {} as MainTo
         className="hidden"
       />
       <input
+        ref={lodArtifactsInputRef}
+        type="file"
+        accept=".json,.glb"
+        multiple
+        onChange={handleLodArtifactsSelect}
+        className="hidden"
+      />
+      <input
         ref={addModelInputRef}
         type="file"
         accept=".ifc,.ifcx"
@@ -400,6 +420,58 @@ export function MainToolbar({ onShowShortcuts }: MainToolbarProps = {} as MainTo
         </TooltipTrigger>
         <TooltipContent>Open IFC File</TooltipContent>
       </Tooltip>
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={(e) => {
+              (e.currentTarget as HTMLButtonElement).blur();
+              lodArtifactsInputRef.current?.click();
+            }}
+            disabled={loading}
+          >
+            <Upload className="h-4 w-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Open LOD artifacts (lod0_preview.json / lod1.glb / lod1.meta.json)</TooltipContent>
+      </Tooltip>
+
+      <DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-sm" disabled={!geometryResult}>
+                <Box className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent>Geometry Mode</TooltipContent>
+        </Tooltip>
+        <DropdownMenuContent>
+          <DropdownMenuCheckboxItem
+            checked={geometryMode === 'lod0'}
+            disabled={!lod0Preview}
+            onCheckedChange={() => applyGeometryMode('lod0')}
+          >
+            Preview (LOD0)
+          </DropdownMenuCheckboxItem>
+          <DropdownMenuCheckboxItem
+            checked={geometryMode === 'lod1'}
+            disabled={!lod1Glb}
+            onCheckedChange={() => applyGeometryMode('lod1')}
+          >
+            Full geometry (LOD1)
+          </DropdownMenuCheckboxItem>
+          {lod1Meta?.status === 'degraded' && (
+            <DropdownMenuItem disabled>
+              <Info className="h-4 w-4 mr-2" />
+              LOD1 is degraded (fallback/partial)
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       {/* Add Model button - only shown when models are loaded */}
       {hasModelsLoaded && (

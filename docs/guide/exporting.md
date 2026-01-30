@@ -180,7 +180,7 @@ const gltf = await exporter.export(parseResult, {
 Export to Apache Parquet for analytics with tools like DuckDB, Pandas, or Polars:
 
 ```typescript
-import { ParquetExporter } from '@ifc-lite/export';
+import { ParquetExporter } from '@ifc-lite/export/parquet';
 
 const exporter = new ParquetExporter();
 

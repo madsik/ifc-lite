@@ -57,9 +57,26 @@ export class IfcLiteBridge {
     if (this.initialized) return;
 
     try {
-      // Initialize WASM module - wasm-bindgen automatically resolves the WASM URL
-      // from import.meta.url, no need to manually construct paths
-      await init();
+      // In browsers, wasm-bindgen can load via fetch(new URL(..., import.meta.url)).
+      // In Node, fetch() does NOT support file:// URLs, so we must load wasm bytes via fs.
+      const isNode =
+        typeof process !== 'undefined' &&
+        !!(process as any).versions?.node &&
+        typeof window === 'undefined';
+
+      if (isNode) {
+        // Resolve wasm path via CJS resolver. @ifc-lite/wasm exposes the wasm file subpath.
+        const { createRequire } = await import('node:module');
+        const require = createRequire(import.meta.url);
+        const wasmPath = require.resolve('@ifc-lite/wasm/pkg/ifc-lite_bg.wasm');
+        const fs = await import('node:fs/promises');
+        const wasmBytes = await fs.readFile(wasmPath);
+        // wasm-bindgen (newer) prefers object arg to avoid deprecation warning
+        await init({ module_or_path: wasmBytes });
+      } else {
+        // Browser / bundler path
+        await init();
+      }
 
       this.ifcApi = new IfcAPI();
       this.initialized = true;

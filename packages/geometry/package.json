@@ -17,6 +17,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ifc-lite/data": "workspace:^",
     "@ifc-lite/wasm": "^1.3.0"
   },
   "optionalDependencies": {

@@ -97,6 +97,11 @@ export const useViewerStore = create<ViewerState>()((...args) => ({
 
       // Data
       pendingColorUpdates: null,
+      lod0Preview: null,
+      lod1Glb: null,
+      lod1Meta: null,
+      geometryMode: 'lod0',
+      geometryModeLocked: false,
 
       // Hover/Context
       hoverState: { entityId: null, screenX: 0, screenY: 0 },

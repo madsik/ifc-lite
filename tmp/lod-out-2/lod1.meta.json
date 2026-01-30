@@ -1,0 +1,28 @@
+{
+  "schema": "ifc-lite-geometry",
+  "lod": 1,
+  "status": "degraded",
+  "fallback": "boxes_from_lod0",
+  "failedElements": [
+    20,
+    21,
+    40
+  ],
+  "notes": [
+    "Meshing failed; using fallback boxes from LOD0. (Cannot export GLB: no valid geometry data found)"
+  ],
+  "mapping": {
+    "20": {
+      "node": 0,
+      "mesh": 0
+    },
+    "21": {
+      "node": 1,
+      "mesh": 1
+    },
+    "40": {
+      "node": 2,
+      "mesh": 2
+    }
+  }
+}

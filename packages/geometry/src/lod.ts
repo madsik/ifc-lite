@@ -3,7 +3,11 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 /**
- * Level of Detail (LOD) system for geometry optimization
+ * Distance-based detail selection for mesh rendering.
+ *
+ * IMPORTANT: In IFC-Lite "LOD0" means placement-based bounding boxes JSON.
+ * This file is about runtime detail selection for meshes, and intentionally
+ * avoids using "LOD0/LOD1" naming to prevent semantic overload.
  * Uses screen-space size culling for performance
  */
 
@@ -24,14 +28,17 @@ export interface LODConfig {
   distanceThresholds?: [number, number, number];
 }
 
-export interface LODMesh {
-  lod0: MeshData;  // Full detail
-  lod1?: MeshData; // Medium detail (future)
-  lod2?: MeshData; // Low detail (future)
+export interface DetailMesh {
+  /** Full-detail mesh */
+  full: MeshData;
+  /** Medium-detail mesh (future) */
+  medium?: MeshData;
+  /** Low-detail mesh (future) */
+  low?: MeshData;
   bounds: { min: Vec3; max: Vec3 };
 }
 
-export class LODGenerator {
+export class DetailSelector {
   private config: Required<LODConfig>;
 
   constructor(config: LODConfig = {}) {

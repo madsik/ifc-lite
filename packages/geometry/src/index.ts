@@ -31,7 +31,7 @@ export { BufferBuilder } from './buffer-builder.js';
 export { CoordinateHandler } from './coordinate-handler.js';
 export { GeometryQuality } from './progressive-loader.js';
 
-export { LODGenerator, type LODConfig, type LODMesh } from './lod.js';
+export { DetailSelector, type LODConfig, type DetailMesh } from './lod.js';
 export {
   deduplicateMeshes,
   getDeduplicationStats,

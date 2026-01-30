@@ -9,6 +9,10 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./parquet": {
+      "import": "./dist/parquet.js",
+      "types": "./dist/parquet.d.ts"
     }
   },
   "scripts": {

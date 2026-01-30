@@ -20,13 +20,14 @@ export type GenerateLod1Options = {
   __forceMeshingErrorForTest?: boolean;
 };
 
-async function readIfcInput(input: IfcInput): Promise<ArrayBuffer> {
+async function readIfcInput(input: IfcInput): Promise<Uint8Array> {
   if (typeof input === 'string') {
     const fs = await import('node:fs/promises');
-    return await fs.readFile(input);
+    const buf = await fs.readFile(input);
+    return new Uint8Array(buf);
   }
-  if (input instanceof ArrayBuffer) return input;
-  return input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength);
+  if (input instanceof ArrayBuffer) return new Uint8Array(input);
+  return input;
 }
 
 function buildBoxMeshFromAabb(min: Vec3, max: Vec3, expressId: number): MeshData {
@@ -107,7 +108,7 @@ export async function generateLod1(input: IfcInput, options: GenerateLod1Options
     const buffer = await readIfcInput(input);
     const gp = new GeometryProcessor({ quality: options.quality });
     await gp.init();
-    const geom = await gp.process(new Uint8Array(buffer));
+    const geom = await gp.process(buffer);
 
     const exporter = new GLTFExporter(geom);
     const glb = exporter.exportGLB({ includeMetadata: true });

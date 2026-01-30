@@ -573,6 +573,8 @@ class RelationshipGraph {
 
 ## @ifc-lite/export
 
+Note: Parquet/BOS export is available from `@ifc-lite/export/parquet` to avoid bundlers pulling in optional parquet dependencies for users that only need GLB/JSON exports.
+
 ### GltfExporter
 
 ```typescript

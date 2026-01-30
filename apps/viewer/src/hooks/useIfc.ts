@@ -17,6 +17,8 @@ import { type GeometryData } from '@ifc-lite/cache';
 import { IfcTypeEnum, RelationshipType, IfcTypeEnumFromString, IfcTypeEnumToString, EntityFlags, type SpatialHierarchy, type SpatialNode, type EntityTable, type RelationshipGraph } from '@ifc-lite/data';
 import { StringTable } from '@ifc-lite/data';
 import { IfcServerClient, decodeDataModel, type ParquetBatch, type DataModel, type ParquetParseResponse, type ParquetStreamResult, type ParseResponse, type ModelMetadata, type ProcessingStats, type MeshData as ServerMeshData } from '@ifc-lite/server-client';
+import { parseGLBToMeshData } from '@ifc-lite/export';
+import type { Lod0Json, Lod1MetaJson } from '@ifc-lite/export';
 
 // Extracted utilities
 import { SERVER_URL, USE_SERVER, CACHE_SIZE_THRESHOLD, getDynamicBatchConfig } from '../utils/ifcConfig.js';
@@ -32,6 +34,7 @@ import {
   normalizeColor,
   convertFloatColorToBytes,
 } from '../utils/localParsingUtils.js';
+import { buildPreviewMeshesFromLod0 } from '../utils/lodGeometry.js';
 
 // Cache hook
 import { useIfcCache, getCached, type CacheResult } from './useIfcCache.js';
@@ -150,6 +153,14 @@ export function useIfc() {
     appendGeometryBatch,
     updateMeshColors,
     updateCoordinateInfo,
+    lod0Preview,
+    lod1Glb,
+    lod1Meta,
+    geometryMode,
+    geometryModeLocked,
+    setLod0Preview,
+    setLod1Artifacts,
+    setGeometryMode,
     // Multi-model state and actions
     models,
     activeModelId,
@@ -1470,6 +1481,119 @@ export function useIfc() {
   }, [setError, loadFederatedIfcxFromBuffers]);
 
   /**
+   * Load pre-generated LOD artifacts (no IFC parsing required).
+   *
+   * Expected artifacts:
+   * - `lod0_preview.json` (schema=ifc-lite-geometry, lod=0)
+   * - `lod1.glb`
+   * - `lod1.meta.json` (schema=ifc-lite-geometry, lod=1)
+   */
+  const loadLodArtifacts = useCallback(async (files: File[]): Promise<void> => {
+    try {
+      setLoading(true);
+      setError(null);
+      setProgress({ phase: 'Loading LOD artifacts', percent: 0 });
+
+      let loadedLod0: Lod0Json | null = null;
+      let loadedGlb: Uint8Array | null = null;
+      let loadedMeta: Lod1MetaJson | null = null;
+
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const name = f.name.toLowerCase();
+        setProgress({ phase: `Reading ${f.name}`, percent: Math.round((i / Math.max(1, files.length)) * 60) });
+
+        if (name.endsWith('.glb')) {
+          const ab = await f.arrayBuffer();
+          loadedGlb = new Uint8Array(ab);
+          continue;
+        }
+
+        if (name.endsWith('.json')) {
+          const text = await f.text();
+          const parsed = JSON.parse(text);
+          if (parsed?.schema === 'ifc-lite-geometry' && parsed?.lod === 0) {
+            loadedLod0 = parsed as Lod0Json;
+          } else if (parsed?.schema === 'ifc-lite-geometry' && parsed?.lod === 1) {
+            loadedMeta = parsed as Lod1MetaJson;
+          }
+        }
+      }
+
+      if (loadedLod0) setLod0Preview(loadedLod0);
+      if (loadedGlb || loadedMeta) setLod1Artifacts({ glb: loadedGlb, meta: loadedMeta });
+
+      const shouldAutoSwitch = !geometryModeLocked && !!(loadedGlb ?? lod1Glb);
+      const modeToApply: 'lod0' | 'lod1' = shouldAutoSwitch ? 'lod1' : geometryMode;
+      if (shouldAutoSwitch) setGeometryMode('lod1', false);
+
+      if (modeToApply === 'lod0') {
+        const lod0 = loadedLod0 ?? lod0Preview;
+        if (!lod0) throw new Error('Missing LOD0 preview JSON (lod0_preview.json)');
+
+        const meshes = buildPreviewMeshesFromLod0(lod0);
+        const { bounds, stats } = calculateMeshBounds(meshes);
+        const coordinateInfo = createCoordinateInfo(bounds);
+        setGeometryResult({ meshes, totalVertices: stats.totalVertices, totalTriangles: stats.totalTriangles, coordinateInfo });
+      } else {
+        const glb = loadedGlb ?? lod1Glb;
+        if (!glb) throw new Error('Missing LOD1 GLB (lod1.glb)');
+
+        const meshes = parseGLBToMeshData(glb);
+        const { bounds, stats } = calculateMeshBounds(meshes);
+        const coordinateInfo = createCoordinateInfo(bounds);
+        setGeometryResult({ meshes, totalVertices: stats.totalVertices, totalTriangles: stats.totalTriangles, coordinateInfo });
+      }
+
+      setProgress({ phase: 'Complete', percent: 100 });
+      setLoading(false);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(`Failed to load LOD artifacts: ${message}`);
+      setLoading(false);
+    }
+  }, [
+    setLoading,
+    setError,
+    setProgress,
+    setLod0Preview,
+    setLod1Artifacts,
+    setGeometryMode,
+    setGeometryResult,
+    geometryMode,
+    geometryModeLocked,
+    lod0Preview,
+    lod1Glb,
+  ]);
+
+  /**
+   * Switch between Preview (LOD0) and Full geometry (LOD1) using already-loaded artifacts.
+   */
+  const applyGeometryMode = useCallback(async (mode: 'lod0' | 'lod1'): Promise<void> => {
+    try {
+      setGeometryMode(mode, true);
+
+      if (mode === 'lod0') {
+        if (!lod0Preview) throw new Error('LOD0 preview JSON not loaded');
+        const meshes = buildPreviewMeshesFromLod0(lod0Preview);
+        const { bounds, stats } = calculateMeshBounds(meshes);
+        const coordinateInfo = createCoordinateInfo(bounds);
+        setGeometryResult({ meshes, totalVertices: stats.totalVertices, totalTriangles: stats.totalTriangles, coordinateInfo });
+        return;
+      }
+
+      if (!lod1Glb) throw new Error('LOD1 GLB not loaded');
+      const meshes = parseGLBToMeshData(lod1Glb);
+      const { bounds, stats } = calculateMeshBounds(meshes);
+      const coordinateInfo = createCoordinateInfo(bounds);
+      setGeometryResult({ meshes, totalVertices: stats.totalVertices, totalTriangles: stats.totalTriangles, coordinateInfo });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(`Failed to apply geometry mode: ${message}`);
+    }
+  }, [setGeometryMode, setGeometryResult, setError, lod0Preview, lod1Glb]);
+
+  /**
    * Find which model contains a given globalId
    * Uses FederationRegistry for O(log N) lookup - BULLETPROOF
    * Returns the modelId or null if not found
@@ -1495,6 +1619,8 @@ export function useIfc() {
     geometryResult,
     query,
     loadFile,
+    loadLodArtifacts,
+    applyGeometryMode,
 
     // Multi-model API
     models,

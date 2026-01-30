@@ -23,12 +23,13 @@ async function getCacheDir(): Promise<string> {
   if (cacheDirPath) return cacheDirPath;
 
   const appDir = await appDataDir();
-  cacheDirPath = await join(appDir, CACHE_DIR_NAME);
+  const resolved = await join(appDir, CACHE_DIR_NAME);
+  cacheDirPath = resolved;
 
   // Ensure cache directory exists (writeFile does NOT auto-create parent directories)
   await fs.mkdir(cacheDirPath, { recursive: true });
 
-  return cacheDirPath;
+  return cacheDirPath!;
 }
 
 /**
@@ -173,7 +174,7 @@ export async function getCacheStats(): Promise<{
     }
 
     const entries = await fs.readDir(dir);
-    const metadataFiles = entries.filter((e) => e.name?.endsWith('.meta.json'));
+    const metadataFiles = entries.filter((e: { name?: string | null }) => e.name?.endsWith('.meta.json'));
 
     const stats = {
       entryCount: 0,
