@@ -16,9 +16,9 @@
     "dev": "tsc --watch"
   },
   "dependencies": {
-    "@ifc-lite/geometry": "workspace:^",
-    "@ifc-lite/spatial": "workspace:^",
-    "@ifc-lite/wasm": "workspace:^"
+    "@ifc-lite/geometry": "^1.3.0",
+    "@ifc-lite/spatial": "^1.2.1",
+    "@ifc-lite/wasm": "^1.3.0"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.69",
