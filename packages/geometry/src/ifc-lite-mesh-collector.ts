@@ -56,13 +56,17 @@ export class IfcLiteMeshCollector {
    * IFC uses Z-up (Z points up), WebGL uses Y-up (Y points up)
    * Transformation: swap Y and Z, then negate new Z to maintain right-handedness
    */
-  private convertZUpToYUp(coords: Float32Array): void {
+  private convertZUpToYUp(coords: Float32Array, translate?: { x: number; y: number; z: number } | null): void {
+    const tx = translate?.x ?? 0;
+    const ty = translate?.y ?? 0;
+    const tz = translate?.z ?? 0;
     for (let i = 0; i < coords.length; i += 3) {
       const y = coords[i + 1];
       const z = coords[i + 2];
       // Swap Y and Z: Z-up → Y-up
-      coords[i + 1] = z;      // New Y = old Z (vertical)
-      coords[i + 2] = -y;     // New Z = -old Y (depth, negated for right-hand rule)
+      coords[i] = coords[i] + tx;          // X unchanged, plus translation
+      coords[i + 1] = z + ty;              // New Y = old Z (vertical), plus translation
+      coords[i + 2] = (-y) + tz;           // New Z = -old Y (depth), plus translation
     }
   }
 
@@ -190,11 +194,50 @@ export class IfcLiteMeshCollector {
     const colorUpdates = new Map<number, [number, number, number, number]>();
     let totalMeshesProcessed = 0;
     let failedMeshCount = 0;
+    let rtc: { x: number; y: number; z: number; hasRtc: boolean } | null = null;
+    let rtcLogged = false;
 
     // Start async processing
     // NOTE: WASM now automatically defers style building for faster first frame
     const processingPromise = this.ifcApi.parseMeshesAsync(this.content, {
       batchSize,
+      onRtcOffset: (r: any) => {
+        try {
+          rtc = {
+            x: Number(r?.x ?? 0),
+            y: Number(r?.y ?? 0),
+            z: Number(r?.z ?? 0),
+            hasRtc: Boolean(r?.hasRtc ?? false),
+          };
+        } catch {
+          rtc = null;
+        }
+        // #region agent log (debug)
+        try {
+          const activeJobId = (globalThis as any)?.__ifcChecker_activeModelJobId ?? null;
+          const activeModelIndex = (globalThis as any)?.__ifcChecker_activeModelIndex ?? null;
+          const r0 = rtc || { x: 0, y: 0, z: 0, hasRtc: false };
+          // Convert RTC offset to viewer Y-up coordinates (same transform as positions):
+          // IFC (x,y,z) -> WebGL (x, z, -y)
+          const rtcYUp = { x: r0.x, y: r0.z, z: -r0.y, hasRtc: r0.hasRtc };
+          fetch('http://127.0.0.1:7243/ingest/0c33703e-a3cc-4523-b6f9-7493b9ad5593', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sessionId: 'debug-session',
+              runId: 'run1',
+              hypothesisId: 'H5',
+              location: 'ifc-lite-mesh-collector.ts:parseMeshesAsync:onRtcOffset',
+              message: 'rtc offset reported by WASM',
+              data: { activeJobId, activeModelIndex, rtc: r0, rtcYUp },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+        } catch {
+          // ignore
+        }
+        // #endregion
+      },
       onColorUpdate: (updates: Map<number, [number, number, number, number]>) => {
         // Store color updates
         for (const [expressId, color] of updates) {
@@ -212,6 +255,61 @@ export class IfcLiteMeshCollector {
         }
       },
       onBatch: (meshes: MeshDataJs[], _progress: StreamingProgress) => {
+        // Compute RTC alignment delta (per-model) to federate models into a common local frame.
+        // We keep coordinates near the first model's local origin to avoid huge float values.
+        let translateYUp: { x: number; y: number; z: number } | null = null;
+        try {
+          // Read current RTC offset from API (available even if onRtcOffset isn't fired).
+          const r0 = {
+            x: Number((this.ifcApi as any).rtcOffsetX ?? 0),
+            y: Number((this.ifcApi as any).rtcOffsetY ?? 0),
+            z: Number((this.ifcApi as any).rtcOffsetZ ?? 0),
+          };
+          const hasRtc = Boolean((this.ifcApi as any)?.rtcOffset?.hasRtc ?? (r0.x !== 0 || r0.y !== 0 || r0.z !== 0));
+          rtc = { ...r0, hasRtc };
+
+          // Convert RTC offset to viewer Y-up coordinates (same transform as positions):
+          // IFC (x,y,z) -> WebGL (x, z, -y)
+          const rtcYUp = { x: r0.x, y: r0.z, z: -r0.y, hasRtc };
+
+          const g: any = globalThis as any;
+          const activeJobId = g?.__ifcChecker_activeModelJobId ?? null;
+          const activeModelIndex = g?.__ifcChecker_activeModelIndex ?? null;
+
+          // Establish common RTC origin from first model.
+          if (!g.__ifcChecker_commonRtcYUp) {
+            g.__ifcChecker_commonRtcYUp = rtcYUp;
+            g.__ifcChecker_commonRtcJobId = activeJobId;
+          }
+          const common = g.__ifcChecker_commonRtcYUp || rtcYUp;
+          translateYUp = {
+            x: rtcYUp.x - common.x,
+            y: rtcYUp.y - common.y,
+            z: rtcYUp.z - common.z,
+          };
+
+          if (!rtcLogged) {
+            rtcLogged = true;
+            // #region agent log (debug)
+            fetch('http://127.0.0.1:7243/ingest/0c33703e-a3cc-4523-b6f9-7493b9ad5593', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                sessionId: 'debug-session',
+                runId: 'run1',
+                hypothesisId: 'H6',
+                location: 'ifc-lite-mesh-collector.ts:onBatch',
+                message: 'rtc offsets + translation computed',
+                data: { activeJobId, activeModelIndex, rtc, rtcYUp, common, translateYUp },
+                timestamp: Date.now(),
+              }),
+            }).catch(() => {});
+            // #endregion
+          }
+        } catch {
+          translateYUp = null;
+        }
+
         // Convert WASM meshes to MeshData[]
         const convertedBatch: MeshData[] = [];
 
@@ -231,9 +329,10 @@ export class IfcLiteMeshCollector {
             const normals = mesh.normals;
             const indices = mesh.indices;
 
-            // Convert IFC Z-up to WebGL Y-up
-            this.convertZUpToYUp(positions);
-            this.convertZUpToYUp(normals);
+            // Convert IFC Z-up to WebGL Y-up, and translate into common RTC frame.
+            // Translation applies to positions only, not normals.
+            this.convertZUpToYUp(positions, translateYUp);
+            this.convertZUpToYUp(normals, null);
 
             // Reverse winding order to compensate for handedness flip from Y negation
             this.reverseWindingOrder(indices);

@@ -399,6 +399,28 @@ export class CoordinateHandler {
                         largeCoordCount,
                         wasmRtcDetected: true,
                     });
+                    // #region agent log (debug)
+                    ;(() => {
+                        const g: any = globalThis as any;
+                        g.__ifcChecker_coordSkipCount = (g.__ifcChecker_coordSkipCount || 0) + 1;
+                        const n = g.__ifcChecker_coordSkipCount;
+                        if (n <= 10) {
+                            fetch('http://127.0.0.1:7243/ingest/0c33703e-a3cc-4523-b6f9-7493b9ad5593', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    sessionId: 'debug-session',
+                                    runId: 'run1',
+                                    hypothesisId: 'H3',
+                                    location: 'coordinate-handler.ts:processMeshesIncremental',
+                                    message: 'skip shift (WASM RTC already applied)',
+                                    data: { n, smallCoordCount, largeCoordCount, wasmRtcDetected: true, shiftCalculated: this.shiftCalculated },
+                                    timestamp: Date.now(),
+                                }),
+                            }).catch(() => { });
+                        }
+                    })();
+                    // #endregion
                 }
             }
             this.shiftCalculated = true;
