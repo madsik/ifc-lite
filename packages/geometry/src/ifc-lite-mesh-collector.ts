@@ -196,6 +196,7 @@ export class IfcLiteMeshCollector {
     let failedMeshCount = 0;
     let rtc: { x: number; y: number; z: number; hasRtc: boolean } | null = null;
     let rtcLogged = false;
+    let rtcEntryLogged = false;
 
     // Start async processing
     // NOTE: WASM now automatically defers style building for faster first frame
@@ -288,6 +289,25 @@ export class IfcLiteMeshCollector {
             z: rtcYUp.z - common.z,
           };
 
+          if (!rtcEntryLogged) {
+            rtcEntryLogged = true;
+            // #region agent log (debug)
+            fetch('http://127.0.0.1:7243/ingest/0c33703e-a3cc-4523-b6f9-7493b9ad5593', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                sessionId: 'debug-session',
+                runId: 'run1',
+                hypothesisId: 'H61',
+                location: 'ifc-lite-mesh-collector.ts:onBatch',
+                message: 'onBatch RTC read + translate computed (first batch for model)',
+                data: { activeJobId, activeModelIndex, r0, hasRtc, rtcYUp, commonJobId: g.__ifcChecker_commonRtcJobId ?? null, translateYUp },
+                timestamp: Date.now(),
+              }),
+            }).catch(() => {});
+            // #endregion
+          }
+
           if (!rtcLogged) {
             rtcLogged = true;
             // #region agent log (debug)
@@ -307,6 +327,24 @@ export class IfcLiteMeshCollector {
             // #endregion
           }
         } catch {
+          // #region agent log (debug)
+          try {
+            const g: any = globalThis as any;
+            fetch('http://127.0.0.1:7243/ingest/0c33703e-a3cc-4523-b6f9-7493b9ad5593', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                sessionId: 'debug-session',
+                runId: 'run1',
+                hypothesisId: 'H62',
+                location: 'ifc-lite-mesh-collector.ts:onBatch',
+                message: 'RTC translation compute failed; translateYUp=null',
+                data: { activeJobId: g?.__ifcChecker_activeModelJobId ?? null, activeModelIndex: g?.__ifcChecker_activeModelIndex ?? null },
+                timestamp: Date.now(),
+              }),
+            }).catch(() => {});
+          } catch {}
+          // #endregion
           translateYUp = null;
         }
 
