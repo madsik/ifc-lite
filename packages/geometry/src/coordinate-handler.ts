@@ -139,6 +139,8 @@ export class CoordinateHandler {
      */
     shiftPositions(positions: Float32Array, shift: Vec3, threshold?: number): void {
         const maxCoord = threshold ?? this.MAX_REASONABLE_COORD;
+        let clampedVertexCount = 0;
+        let worst: { x: number; y: number; z: number; maxAbs: number } | null = null;
         for (let i = 0; i < positions.length; i += 3) {
             const x = positions[i];
             const y = positions[i + 1];
@@ -154,11 +156,46 @@ export class CoordinateHandler {
                 positions[i + 2] = z - shift.z;
             } else {
                 // Corrupted/outlier vertex - set to origin to avoid visual artifacts
+                clampedVertexCount++;
+                const maxAbs = Math.max(Math.abs(x), Math.abs(y), Math.abs(z));
+                if (!worst || maxAbs > worst.maxAbs) {
+                    worst = { x, y, z, maxAbs };
+                }
                 positions[i] = 0;
                 positions[i + 1] = 0;
                 positions[i + 2] = 0;
             }
         }
+
+        // #region agent log (debug)
+        ;(() => {
+            if (clampedVertexCount <= 0) return;
+            const g: any = globalThis as any;
+            g.__ifcChecker_coordClampLogCount = (g.__ifcChecker_coordClampLogCount || 0) + 1;
+            const n = g.__ifcChecker_coordClampLogCount;
+            if (n <= 20) {
+                fetch('http://127.0.0.1:7243/ingest/0c33703e-a3cc-4523-b6f9-7493b9ad5593', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sessionId: 'debug-session',
+                        runId: 'run1',
+                        hypothesisId: 'H202',
+                        location: 'coordinate-handler.ts:shiftPositions',
+                        message: 'clamped outlier/corrupted vertices',
+                        data: {
+                            n,
+                            clampedVertexCount,
+                            maxCoord,
+                            shift,
+                            worst,
+                        },
+                        timestamp: Date.now(),
+                    }),
+                }).catch(() => { });
+            }
+        })();
+        // #endregion
     }
 
     /**
@@ -320,7 +357,99 @@ export class CoordinateHandler {
         // If WASM RTC was detected, use stricter threshold to exclude outliers
         // Store in instance variable so shiftPositions uses the same threshold
         this.activeThreshold = this.wasmRtcDetected ? this.NORMAL_COORD_THRESHOLD : this.MAX_REASONABLE_COORD;
+
+        // #region agent log (debug)
+        ;(() => {
+            // Sample raw positions BEFORE any filtering, to detect "leaked" world-scale vertices.
+            let rawMaxAbs = 0;
+            let sampled = 0;
+            for (const mesh of batch) {
+                const p = mesh.positions;
+                const limit = Math.min(p.length, 3000);
+                for (let i = 0; i + 2 < limit; i += 3) {
+                    const x = p[i];
+                    const y = p[i + 1];
+                    const z = p[i + 2];
+                    const m = Math.max(Math.abs(x), Math.abs(y), Math.abs(z));
+                    if (Number.isFinite(m) && m > rawMaxAbs)
+                        rawMaxAbs = m;
+                }
+                sampled += Math.floor(limit / 3);
+                if (sampled >= 5000)
+                    break;
+            }
+            if (rawMaxAbs > 20000) {
+                const g = globalThis as any;
+                g.__ifcChecker_coordRawMaxAbsLogCount = (g.__ifcChecker_coordRawMaxAbsLogCount || 0) + 1;
+                const n = g.__ifcChecker_coordRawMaxAbsLogCount;
+                if (n <= 40) {
+                    fetch('http://127.0.0.1:7243/ingest/0c33703e-a3cc-4523-b6f9-7493b9ad5593', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            sessionId: 'debug-session',
+                            runId: 'run1',
+                            hypothesisId: 'H203',
+                            location: 'coordinate-handler.ts:processMeshesIncremental',
+                            message: 'raw vertex magnitude indicates world-scale coords',
+                            data: {
+                                n,
+                                rawMaxAbs,
+                                wasmRtcDetectedAtEntry: this.wasmRtcDetected,
+                                activeThresholdAtEntry: this.activeThreshold,
+                                shiftCalculated: this.shiftCalculated,
+                                originShift: this.originShift,
+                                batchMeshCount: batch.length,
+                            },
+                            timestamp: Date.now(),
+                        }),
+                    }).catch(() => { });
+                }
+            }
+        })();
+        // #endregion
+
         const batchBounds = this.calculateBounds(batch, this.activeThreshold);
+
+        // #region agent log (debug)
+        ;(() => {
+            const batchMaxAbs = Math.max(
+                Math.abs(batchBounds.min.x), Math.abs(batchBounds.max.x),
+                Math.abs(batchBounds.min.y), Math.abs(batchBounds.max.y),
+                Math.abs(batchBounds.min.z), Math.abs(batchBounds.max.z),
+            );
+            // Only log when bounds look "world scale" but we are not shifting (suspected leak path)
+            if (batchMaxAbs > 20000) {
+                const g: any = globalThis as any;
+                g.__ifcChecker_coordBatchMaxAbsLogCount = (g.__ifcChecker_coordBatchMaxAbsLogCount || 0) + 1;
+                const n = g.__ifcChecker_coordBatchMaxAbsLogCount;
+                if (n <= 40) {
+                    fetch('http://127.0.0.1:7243/ingest/0c33703e-a3cc-4523-b6f9-7493b9ad5593', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            sessionId: 'debug-session',
+                            runId: 'run1',
+                            hypothesisId: 'H201',
+                            location: 'coordinate-handler.ts:processMeshesIncremental',
+                            message: 'batch bounds exceed world-scale threshold',
+                            data: {
+                                n,
+                                batchMaxAbs,
+                                wasmRtcDetected: this.wasmRtcDetected,
+                                activeThreshold: this.activeThreshold,
+                                shiftCalculated: this.shiftCalculated,
+                                originShift: this.originShift,
+                                batchBounds,
+                                batchMeshCount: batch.length,
+                            },
+                            timestamp: Date.now(),
+                        }),
+                    }).catch(() => { });
+                }
+            }
+        })();
+        // #endregion
 
         if (this.accumulatedBounds === null) {
             this.accumulatedBounds = batchBounds;
@@ -380,8 +509,42 @@ export class CoordinateHandler {
 
                 if (wasmRtcLikelyApplied) {
                     this.wasmRtcDetected = true;
+                    // IMPORTANT: we must tighten the activeThreshold for THIS batch as well,
+                    // otherwise shiftPositions() will treat leaked world-scale vertices as "valid"
+                    // (since MAX_REASONABLE_COORD is 1e7) and they can slip through into the viewer.
+                    this.activeThreshold = this.NORMAL_COORD_THRESHOLD;
                     // Recalculate bounds excluding outliers (use stricter threshold)
                     this.accumulatedBounds = this.calculateBounds(batch, this.NORMAL_COORD_THRESHOLD);
+                    // #region agent log (debug)
+                    ;(() => {
+                        const g = globalThis as any;
+                        g.__ifcChecker_coordWasmRtcLogCount = (g.__ifcChecker_coordWasmRtcLogCount || 0) + 1;
+                        const n = g.__ifcChecker_coordWasmRtcLogCount;
+                        if (n <= 20) {
+                            fetch('http://127.0.0.1:7243/ingest/0c33703e-a3cc-4523-b6f9-7493b9ad5593', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    sessionId: 'debug-session',
+                                    runId: 'run1',
+                                    hypothesisId: 'H204',
+                                    location: 'coordinate-handler.ts:processMeshesIncremental',
+                                    message: 'WASM RTC detected on first batch',
+                                    data: {
+                                        n,
+                                        smallCoordCount,
+                                        largeCoordCount,
+                                        totalMeshes,
+                                        wasmRtcLikelyApplied,
+                                        activeThresholdStill: this.activeThreshold,
+                                        normalCoordThreshold: this.NORMAL_COORD_THRESHOLD,
+                                    },
+                                    timestamp: Date.now(),
+                                }),
+                            }).catch(() => { });
+                        }
+                    })();
+                    // #endregion
                 }
 
                 // Check if shift is needed (>10km from origin) AND WASM didn't already apply RTC
@@ -431,6 +594,14 @@ export class CoordinateHandler {
         if (this.originShift.x !== 0 || this.originShift.y !== 0 || this.originShift.z !== 0) {
             for (const mesh of batch) {
                 this.shiftPositions(mesh.positions, this.originShift, this.activeThreshold);
+            }
+        } else {
+            // IMPORTANT: Even when we skip shifting (originShift = 0), we must still clean outlier/corrupted vertices.
+            // Otherwise a small number of "world coordinate" vertices can slip through and break federation in the viewer,
+            // while bounds calculations ignore them due to the strict activeThreshold.
+            const zeroShift = { x: 0, y: 0, z: 0 };
+            for (const mesh of batch) {
+                this.shiftPositions(mesh.positions, zeroShift, this.activeThreshold);
             }
         }
     }
