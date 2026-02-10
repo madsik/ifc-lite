@@ -7,6 +7,10 @@
  * Now powered by IFC-Lite native Rust WASM (1.9x faster than web-ifc)
  */
 
+// Build marker for debugging module resolution/caching.
+// NOTE: keep this as a stable exported string so app code can verify which build is bundled.
+export const __IFC_LITE_GEOMETRY_BUILD_ID = 'rtc-federation-build-2026-02-09a';
+
 // IFC-Lite components (recommended - faster)
 export { IfcLiteBridge } from './ifc-lite-bridge.js';
 export { IfcLiteMeshCollector, type StreamingColorUpdateEvent } from './ifc-lite-mesh-collector.js';
@@ -32,6 +36,15 @@ export { CoordinateHandler } from './coordinate-handler.js';
 export { GeometryQuality } from './progressive-loader.js';
 
 export { DetailSelector, type LODConfig, type DetailMesh } from './lod.js';
+export { computeRtcOffsetIfc, RTC_MAX_REASONABLE, RTC_TRIGGER_THRESHOLD } from './rtc.js';
+export {
+  extractCandidates,
+  scoreCandidates,
+  type SemanticCandidate,
+  type RankedCandidate,
+  type FederationHint,
+  type IfcModelLike,
+} from './semantic-alignment/candidates.js';
 export {
   deduplicateMeshes,
   getDeduplicationStats,
@@ -102,9 +115,16 @@ export function calculateDynamicBatchSize(
 export type StreamingGeometryEvent =
   | { type: 'start'; totalEstimate: number }
   | { type: 'model-open'; modelID: number }
-  | { type: 'batch'; meshes: MeshData[]; totalSoFar: number; coordinateInfo?: import('./types.js').CoordinateInfo }
+  | {
+      type: 'batch';
+      meshes: MeshData[];
+      totalSoFar: number;
+      coordinateInfo?: import('./types.js').CoordinateInfo;
+      rtcInfo?: import('./types.js').RtcFrameInfo;
+      zeroCopyBatch?: import('./zero-copy-collector.js').ZeroCopyBatch;
+    }
   | { type: 'colorUpdate'; updates: Map<number, [number, number, number, number]> }
-  | { type: 'complete'; totalMeshes: number; coordinateInfo: import('./types.js').CoordinateInfo };
+  | { type: 'complete'; totalMeshes: number; coordinateInfo: import('./types.js').CoordinateInfo; rtcInfo?: import('./types.js').RtcFrameInfo };
 
 export type StreamingInstancedGeometryEvent =
   | { type: 'start'; totalEstimate: number }
@@ -273,15 +293,18 @@ export class GeometryProcessor {
       const collector = new IfcLiteMeshCollector(this.bridge.getApi(), content);
       let totalMeshes = 0;
 
-      // Determine optimal WASM batch size based on file size
-      // Larger batches = fewer callbacks = faster processing
+      // Determine WASM batch size based on file size.
+      // Keep first-visible latency low by preferring smaller batches.
       const fileSizeMB = typeof batchConfig !== 'number' && batchConfig.fileSizeMB
         ? batchConfig.fileSizeMB
         : buffer.length / (1024 * 1024);
 
-      // Use WASM batches directly - no JS accumulation layer
-      // WASM already prioritizes simple geometry (walls, slabs) for fast first frame
-      const wasmBatchSize = fileSizeMB < 10 ? 100 : fileSizeMB < 50 ? 200 : fileSizeMB < 100 ? 300 : 500;
+      // Lower batch sizes improve time-to-first-triangles significantly on medium files.
+      // Throughput remains acceptable with renderer-side append-only batching.
+      const wasmBatchSize =
+        fileSizeMB < 10 ? 40 :
+        fileSizeMB < 50 ? 80 :
+        fileSizeMB < 100 ? 120 : 160;
 
       // Use WASM batches directly for maximum throughput
       for await (const item of collector.collectMeshesStreaming(wasmBatchSize)) {
@@ -297,12 +320,64 @@ export class GeometryProcessor {
         this.coordinateHandler.processMeshesIncremental(batch);
         totalMeshes += batch.length;
         const coordinateInfo = this.coordinateHandler.getCurrentCoordinateInfo();
-        yield { type: 'batch', meshes: batch, totalSoFar: totalMeshes, coordinateInfo: coordinateInfo || undefined };
+        const rtcInfo = collector.getLastRtcFrameInfo ? collector.getLastRtcFrameInfo() : null;
+        yield { type: 'batch', meshes: batch, totalSoFar: totalMeshes, coordinateInfo: coordinateInfo || undefined, rtcInfo: rtcInfo || undefined };
       }
 
       const coordinateInfo = this.coordinateHandler.getFinalCoordinateInfo();
-      yield { type: 'complete', totalMeshes, coordinateInfo };
+      const rtcInfo = collector.getLastRtcFrameInfo ? collector.getLastRtcFrameInfo() : null;
+      yield { type: 'complete', totalMeshes, coordinateInfo, rtcInfo: rtcInfo || undefined };
     }
+  }
+
+  /**
+   * Zero-copy streaming path (WASM only): emits GPU-ready batches with views into WASM memory.
+   * Caller must upload immediately and call batch.free().
+   */
+  async *processZeroCopyStreaming(
+    buffer: Uint8Array,
+    batchConfig: number | DynamicBatchConfig = 25
+  ): AsyncGenerator<StreamingGeometryEvent> {
+    if (this.isNative) {
+      throw new Error('Zero-copy streaming currently supports WASM path only');
+    }
+    if (!this.bridge?.isInitialized()) {
+      await this.init();
+    }
+
+    this.coordinateHandler.reset();
+    yield { type: 'start', totalEstimate: buffer.length / 1000 };
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const decoder = new TextDecoder();
+    const content = decoder.decode(buffer);
+    yield { type: 'model-open', modelID: 0 };
+
+    const { ZeroCopyMeshCollector } = await import('./zero-copy-collector.js');
+    const collector = new ZeroCopyMeshCollector(this.bridge!.getApi(), content);
+    let totalMeshes = 0;
+
+    const fileSizeMB = typeof batchConfig !== 'number' && batchConfig.fileSizeMB
+      ? batchConfig.fileSizeMB
+      : buffer.length / (1024 * 1024);
+
+    const wasmBatchSize =
+      fileSizeMB < 10 ? 40 :
+      fileSizeMB < 50 ? 80 :
+      fileSizeMB < 100 ? 120 : 160;
+
+    for await (const batch of collector.streamBatches(wasmBatchSize)) {
+      totalMeshes += batch.stats.meshCount;
+      yield {
+        type: 'batch',
+        meshes: [],
+        totalSoFar: totalMeshes,
+        zeroCopyBatch: batch,
+      };
+    }
+
+    const coordinateInfo = this.coordinateHandler.getFinalCoordinateInfo();
+    yield { type: 'complete', totalMeshes, coordinateInfo };
   }
 
   /**

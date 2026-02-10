@@ -10,6 +10,10 @@ export interface MeshData {
   expressId: number;
   ifcType?: string;          // IFC type name (e.g., "IfcWall", "IfcSpace") - optional for backward compatibility with old caches
   modelIndex?: number;       // Index of the model this mesh belongs to (for multi-model federation)
+  /** Optional model-space->scene-space transform (column-major mat4). */
+  modelTransform?: Float32Array;
+  /** Optional stable grouping key so renderer can batch by transform frame too. */
+  batchGroupKey?: string;
   positions: Float32Array;  // [x,y,z, x,y,z, ...]
   normals: Float32Array;    // [nx,ny,nz, ...]
   indices: Uint32Array;     // Triangle indices
@@ -65,6 +69,25 @@ export interface CoordinateInfo {
   shiftedBounds: AABB;      // Bounds after shift
   /** True if model had large coordinates requiring RTC shift. NOT the same as proper georeferencing via IfcMapConversion. */
   hasLargeCoordinates: boolean;
+}
+
+/**
+ * RTC (Relative-To-Center) frame information for streamed geometry.
+ *
+ * Notes:
+ * - `modelRtcIfc` is the per-model RTC offset in IFC coordinates (Z-up).
+ * - `modelRtcYUp` is the same offset converted to viewer Y-up (x, z, -y).
+ * - When federating, geometry is emitted in (world - commonRtcYUp) if `hasRtc` is true.
+ */
+export interface RtcFrameInfo {
+  hasRtc: boolean;
+  /** Where the RTC offset came from. */
+  source?: 'wasm' | 'js' | 'none';
+  modelRtcIfc: Vec3;
+  modelRtcYUp: Vec3;
+  commonRtcYUp: (Vec3 & { hasRtc?: boolean }) | null;
+  /** Translation applied during Z-up->Y-up conversion to align into common RTC. */
+  translateYUp: Vec3 | null;
 }
 
 export interface GeometryResult {

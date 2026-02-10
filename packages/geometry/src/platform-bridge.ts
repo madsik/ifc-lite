@@ -102,7 +102,15 @@ export interface IPlatformBridge {
  * Detect if running in Tauri desktop environment
  */
 export function isTauri(): boolean {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  try {
+    const win: any = typeof window !== 'undefined' ? (window as any) : null
+    const hasKey = Boolean(win && '__TAURI_INTERNALS__' in win)
+    const invokeType = hasKey ? typeof win?.__TAURI_INTERNALS__?.invoke : 'missing'
+    const ok = Boolean(hasKey && invokeType === 'function')
+    return ok
+  } catch {
+    return false
+  }
 }
 
 /**

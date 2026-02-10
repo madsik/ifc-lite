@@ -7,7 +7,18 @@
  */
 
 import { WebGPUDevice } from './device.js';
-import type { Mesh, PickResult } from './types.js';
+import type { Mesh, PickResult, Mat4 } from './types.js';
+
+export interface PickDrawable {
+  vertexBuffer: GPUBuffer;
+  indexBuffer: GPUBuffer;
+  indexCount: number;
+  firstIndex: number;
+  baseVertex: number;
+  transform: Mat4;
+  expressId: number;
+  modelIndex?: number;
+}
 
 export class Picker {
   private device: GPUDevice;
@@ -35,9 +46,9 @@ export class Picker {
       usage: GPUTextureUsage.RENDER_ATTACHMENT,
     });
 
-    // Create uniform buffer for viewProj matrix only (16 floats = 64 bytes)
+    // Create uniform buffer for viewProj + model matrices (32 floats = 128 bytes)
     this.uniformBuffer = this.device.createBuffer({
-      size: 64,
+      size: 128,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
@@ -53,6 +64,7 @@ export class Picker {
       code: `
         struct Uniforms {
           viewProj: mat4x4<f32>,
+          model: mat4x4<f32>,
         }
         @binding(0) @group(0) var<uniform> uniforms: Uniforms;
         @binding(1) @group(0) var<storage, read> expressIds: array<u32>;
@@ -70,8 +82,7 @@ export class Picker {
         @vertex
         fn vs_main(input: VertexInput, @builtin(instance_index) instanceIndex: u32) -> VertexOutput {
           var output: VertexOutput;
-          // Identity transform - positions are already in world space
-          output.position = uniforms.viewProj * vec4<f32>(input.position, 1.0);
+          output.position = uniforms.viewProj * uniforms.model * vec4<f32>(input.position, 1.0);
           // Look up expressId from storage buffer using instance index
           output.objectId = expressIds[instanceIndex];
           return output;
@@ -141,7 +152,7 @@ export class Picker {
     y: number,
     width: number,
     height: number,
-    meshes: Mesh[],
+    drawables: PickDrawable[],
     viewProj: Float32Array
   ): Promise<PickResult | null> {
     // Resize textures if needed
@@ -187,18 +198,15 @@ export class Picker {
     });
 
     // Resize buffer if needed (safety net for very large models)
-    if (meshes.length > this.maxMeshes) {
-      this.resizeExpressIdBuffer(meshes.length);
+    if (drawables.length > this.maxMeshes) {
+      this.resizeExpressIdBuffer(drawables.length);
     }
-
-    // Upload viewProj matrix to uniform buffer (once for all meshes)
-    this.device.queue.writeBuffer(this.uniformBuffer, 0, viewProj);
 
     // Build mesh index array (index + 1, so 0 = no hit)
     // Using mesh index instead of expressId to properly support multi-model with overlapping expressIds
-    const meshIndexArray = new Uint32Array(meshes.length);
-    for (let i = 0; i < meshes.length; i++) {
-      if (meshes[i]) {
+    const meshIndexArray = new Uint32Array(drawables.length);
+    for (let i = 0; i < drawables.length; i++) {
+      if (drawables[i]) {
         meshIndexArray[i] = i + 1;  // +1 so 0 means no hit
       }
     }
@@ -209,14 +217,19 @@ export class Picker {
 
     // Draw each mesh with its index as the first instance
     // The shader will use this instance_index to look up the expressId
-    for (let i = 0; i < meshes.length; i++) {
-      const mesh = meshes[i];
-      if (!mesh) continue;
+    for (let i = 0; i < drawables.length; i++) {
+      const d = drawables[i];
+      if (!d) continue;
 
-      pass.setVertexBuffer(0, mesh.vertexBuffer);
-      pass.setIndexBuffer(mesh.indexBuffer, 'uint32');
+      const uniformData = new Float32Array(32);
+      uniformData.set(viewProj, 0);
+      uniformData.set(d.transform.m, 16);
+      this.device.queue.writeBuffer(this.uniformBuffer, 0, uniformData);
+
+      pass.setVertexBuffer(0, d.vertexBuffer);
+      pass.setIndexBuffer(d.indexBuffer, 'uint32');
       // Draw 1 instance, starting at instance i (so instance_index = i in shader)
-      pass.drawIndexed(mesh.indexCount, 1, 0, 0, i);
+      pass.drawIndexed(d.indexCount, 1, d.firstIndex, d.baseVertex, i);
     }
 
     pass.end();
@@ -254,12 +267,12 @@ export class Picker {
     if (meshIndex === 0) return null;
 
     // Look up the mesh to get both expressId and modelIndex
-    const mesh = meshes[meshIndex - 1];
-    if (!mesh) return null;
+    const drawable = drawables[meshIndex - 1];
+    if (!drawable) return null;
 
     return {
-      expressId: mesh.expressId,
-      modelIndex: mesh.modelIndex,
+      expressId: drawable.expressId,
+      modelIndex: drawable.modelIndex,
     };
   }
 

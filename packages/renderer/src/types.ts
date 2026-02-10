@@ -78,6 +78,7 @@ export interface BatchedMesh {
   indexBuffer: GPUBuffer;
   indexCount: number;
   color: [number, number, number, number];
+  transform: Mat4;
   expressIds: number[];  // For picking - all expressIds in this batch
   bindGroup?: GPUBindGroup;
   uniformBuffer?: GPUBuffer;

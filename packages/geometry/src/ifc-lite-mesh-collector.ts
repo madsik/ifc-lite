@@ -9,7 +9,8 @@
 
 import { createLogger } from '@ifc-lite/data';
 import type { IfcAPI, MeshDataJs, InstancedGeometry, MeshCollection } from '@ifc-lite/wasm';
-import type { MeshData } from './types.js';
+import type { MeshData, RtcFrameInfo } from './types.js';
+import { computeRtcOffsetIfc } from './rtc.js';
 
 const log = createLogger('MeshCollector');
 
@@ -45,10 +46,89 @@ export type StreamingEvent = StreamingBatchEvent | StreamingCompleteEvent | Stre
 export class IfcLiteMeshCollector {
   private ifcApi: IfcAPI;
   private content: string;
+  private lastRtcFrameInfo: RtcFrameInfo | null = null;
+  private jsRtcComputed: boolean = false;
+  private jsRtc: { hasRtc: boolean; rtcOffsetIfc: { x: number; y: number; z: number } } | null = null;
 
   constructor(ifcApi: IfcAPI, content: string) {
     this.ifcApi = ifcApi;
     this.content = content;
+  }
+
+  /**
+   * Latest RTC frame info computed for the current streaming batch.
+   * Useful for diagnostics and for higher-level federation logic.
+   */
+  getLastRtcFrameInfo(): RtcFrameInfo | null {
+    return this.lastRtcFrameInfo;
+  }
+
+  private sampleMaxAbsSpreadIfc(coords: Float32Array, samples: number = 256): number {
+    if (!coords || typeof coords.length !== 'number' || coords.length < 3) return 0;
+    const n = Math.max(1, Math.floor(samples));
+    const last = coords.length - 3;
+    let maxAbs = 0;
+    for (let i = 0; i < n; i += 1) {
+      const t = n === 1 ? 0 : i / (n - 1);
+      const idx = Math.floor((t * last) / 3) * 3;
+      const x = coords[idx];
+      const y = coords[idx + 1];
+      const z = coords[idx + 2];
+      const a = Math.max(Math.abs(x), Math.abs(y), Math.abs(z));
+      if (Number.isFinite(a) && a > maxAbs) maxAbs = a;
+    }
+    return maxAbs;
+  }
+
+  private sampleBoundsSpreadIfc(meshes: MeshDataJs[], maxMeshes: number = 4, samplesPerMesh: number = 256): { min: { x: number; y: number; z: number }, max: { x: number; y: number; z: number } } | null {
+    const mn = { x: Infinity, y: Infinity, z: Infinity };
+    const mx = { x: -Infinity, y: -Infinity, z: -Infinity };
+    let saw = false;
+    const mlim = Math.min(Math.max(0, Math.floor(maxMeshes)), meshes.length);
+    for (let mi = 0; mi < mlim; mi += 1) {
+      const p = meshes[mi]?.positions as Float32Array | undefined;
+      if (!p || typeof p.length !== 'number' || p.length < 3) continue;
+      const n = Math.max(1, Math.floor(samplesPerMesh));
+      const last = p.length - 3;
+      for (let i = 0; i < n; i += 1) {
+        const t = n === 1 ? 0 : i / (n - 1);
+        const idx = Math.floor((t * last) / 3) * 3;
+        const x = p[idx];
+        const y = p[idx + 1];
+        const z = p[idx + 2];
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+        mn.x = Math.min(mn.x, x); mn.y = Math.min(mn.y, y); mn.z = Math.min(mn.z, z);
+        mx.x = Math.max(mx.x, x); mx.y = Math.max(mx.y, y); mx.z = Math.max(mx.z, z);
+        saw = true;
+      }
+    }
+    if (!saw) return null;
+    return { min: mn, max: mx };
+  }
+
+  private detectJsRtcOffsetIfc(meshes: MeshDataJs[]): { hasRtc: boolean; rtcOffsetIfc: { x: number; y: number; z: number } } {
+    // Compute once per IFC content / collector instance.
+    if (this.jsRtcComputed && this.jsRtc) return this.jsRtc;
+    this.jsRtcComputed = true;
+
+    try {
+      const b = this.sampleBoundsSpreadIfc(meshes, 4, 256);
+      if (!b) {
+        this.jsRtc = { hasRtc: false, rtcOffsetIfc: { x: 0, y: 0, z: 0 } };
+        return this.jsRtc;
+      }
+      const cand = {
+        x: (Number(b.min.x) + Number(b.max.x)) / 2,
+        y: (Number(b.min.y) + Number(b.max.y)) / 2,
+        z: (Number(b.min.z) + Number(b.max.z)) / 2,
+      };
+      const js = computeRtcOffsetIfc(cand);
+      this.jsRtc = { hasRtc: Boolean(js.hasRtc), rtcOffsetIfc: { x: Number(js.rtcOffsetIfc.x), y: Number(js.rtcOffsetIfc.y), z: Number(js.rtcOffsetIfc.z) } };
+      return this.jsRtc;
+    } catch {
+      this.jsRtc = { hasRtc: false, rtcOffsetIfc: { x: 0, y: 0, z: 0 } };
+      return this.jsRtc;
+    }
   }
 
   /**
@@ -213,31 +293,6 @@ export class IfcLiteMeshCollector {
         } catch {
           rtc = null;
         }
-        // #region agent log (debug)
-        try {
-          const activeJobId = (globalThis as any)?.__ifcChecker_activeModelJobId ?? null;
-          const activeModelIndex = (globalThis as any)?.__ifcChecker_activeModelIndex ?? null;
-          const r0 = rtc || { x: 0, y: 0, z: 0, hasRtc: false };
-          // Convert RTC offset to viewer Y-up coordinates (same transform as positions):
-          // IFC (x,y,z) -> WebGL (x, z, -y)
-          const rtcYUp = { x: r0.x, y: r0.z, z: -r0.y, hasRtc: r0.hasRtc };
-          fetch('http://127.0.0.1:7243/ingest/0c33703e-a3cc-4523-b6f9-7493b9ad5593', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              sessionId: 'debug-session',
-              runId: 'run1',
-              hypothesisId: 'H5',
-              location: 'ifc-lite-mesh-collector.ts:parseMeshesAsync:onRtcOffset',
-              message: 'rtc offset reported by WASM',
-              data: { activeJobId, activeModelIndex, rtc: r0, rtcYUp },
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
-        } catch {
-          // ignore
-        }
-        // #endregion
       },
       onColorUpdate: (updates: Map<number, [number, number, number, number]>) => {
         // Store color updates
@@ -259,14 +314,44 @@ export class IfcLiteMeshCollector {
         // Compute RTC alignment delta (per-model) to federate models into a common local frame.
         // We keep coordinates near the first model's local origin to avoid huge float values.
         let translateYUp: { x: number; y: number; z: number } | null = null;
+        let rtcSource: 'wasm' | 'js' | 'none' = 'none';
+        let m0Spread = 0;
+        let mBatchSpread = 0;
         try {
           // Read current RTC offset from API (available even if onRtcOffset isn't fired).
-          const r0 = {
+          const r0raw = {
             x: Number((this.ifcApi as any).rtcOffsetX ?? 0),
             y: Number((this.ifcApi as any).rtcOffsetY ?? 0),
             z: Number((this.ifcApi as any).rtcOffsetZ ?? 0),
           };
-          const hasRtc = Boolean((this.ifcApi as any)?.rtcOffset?.hasRtc ?? (r0.x !== 0 || r0.y !== 0 || r0.z !== 0));
+          const wasmHasRtc = Boolean((this.ifcApi as any)?.rtcOffset?.hasRtc ?? (r0raw.x !== 0 || r0raw.y !== 0 || r0raw.z !== 0));
+          let out = wasmHasRtc ? computeRtcOffsetIfc(r0raw) : { hasRtc: false, rtcOffsetIfc: { x: 0, y: 0, z: 0 } };
+          rtcSource = out.hasRtc ? 'wasm' : 'none';
+
+          // JS fallback: if WASM didn't report RTC, detect from actual IFC-coordinate vertex magnitudes.
+          // This fixes datasets where WASM doesn't surface rtcOffset but geometry is clearly world-scale.
+          if (!out.hasRtc) {
+            // Spread-sample a few meshes in the batch. Some datasets have "small" first meshes
+            // but later meshes contain the world-scale coordinates (if we only look at meshes[0], RTC can be missed).
+            const maxMeshes = Math.min(4, Array.isArray(meshes) ? meshes.length : 0);
+            for (let mi = 0; mi < maxMeshes; mi++) {
+              const pm = meshes && meshes.length > mi ? (meshes[mi]?.positions as Float32Array | undefined) : undefined;
+              const s = pm && pm.length >= 3 ? this.sampleMaxAbsSpreadIfc(pm, 256) : 0;
+              if (mi === 0) m0Spread = s;
+              mBatchSpread = Math.max(mBatchSpread, s);
+            }
+
+            if (mBatchSpread > 10_000) {
+              const js = this.detectJsRtcOffsetIfc(meshes);
+              if (js.hasRtc) {
+                out = { hasRtc: true, rtcOffsetIfc: js.rtcOffsetIfc };
+                rtcSource = 'js';
+              }
+            }
+          }
+
+          const r0 = out.rtcOffsetIfc;
+          const hasRtc = Boolean(out.hasRtc);
           rtc = { ...r0, hasRtc };
 
           // Convert RTC offset to viewer Y-up coordinates (same transform as positions):
@@ -277,75 +362,47 @@ export class IfcLiteMeshCollector {
           const activeJobId = g?.__ifcChecker_activeModelJobId ?? null;
           const activeModelIndex = g?.__ifcChecker_activeModelIndex ?? null;
 
-          // Establish common RTC origin from first model.
-          if (!g.__ifcChecker_commonRtcYUp) {
+          // Establish a common RTC origin for federated loads.
+          //
+          // IMPORTANT:
+          // - Only RTC-enabled models should participate in the common-RTC frame.
+          // - If the first model has no RTC but a later model does, upgrade the common origin to the first RTC-enabled model.
+          //   (Otherwise we'd keep commonRtc at 0 and start emitting world-scale vertices for large-coordinate models.)
+          const existingCommon = g.__ifcChecker_commonRtcYUp ?? null;
+          const existingCommonHasRtc = Boolean(existingCommon?.hasRtc);
+          if (!existingCommon || (!existingCommonHasRtc && hasRtc)) {
             g.__ifcChecker_commonRtcYUp = rtcYUp;
             g.__ifcChecker_commonRtcJobId = activeJobId;
           }
           const common = g.__ifcChecker_commonRtcYUp || rtcYUp;
-          translateYUp = {
-            x: rtcYUp.x - common.x,
-            y: rtcYUp.y - common.y,
-            z: rtcYUp.z - common.z,
+          const commonHasRtc = Boolean(common?.hasRtc);
+
+          // Only apply common-RTC translation when BOTH:
+          // - the federation common frame is RTC-enabled, and
+          // - this model is RTC-enabled (its vertices are emitted as world - rtcOffset).
+          //
+          // If we translate a non-RTC model by (-commonRtc), we can scatter otherwise-correct local models.
+          translateYUp =
+            commonHasRtc && hasRtc
+              ? {
+                  x: rtcYUp.x - common.x,
+                  y: rtcYUp.y - common.y,
+                  z: rtcYUp.z - common.z,
+                }
+              : null;
+
+          // Expose RTC frame info for this batch (IFC + Y-up + common + delta).
+          this.lastRtcFrameInfo = {
+            hasRtc,
+            source: rtcSource,
+            modelRtcIfc: { x: r0.x, y: r0.y, z: r0.z },
+            modelRtcYUp: { x: rtcYUp.x, y: rtcYUp.y, z: rtcYUp.z },
+            commonRtcYUp: common ? { x: Number(common.x), y: Number(common.y), z: Number(common.z), hasRtc: Boolean(common?.hasRtc) } : null,
+            translateYUp: translateYUp ? { x: Number(translateYUp.x), y: Number(translateYUp.y), z: Number(translateYUp.z) } : null,
           };
-
-          if (!rtcEntryLogged) {
-            rtcEntryLogged = true;
-            // #region agent log (debug)
-            fetch('http://127.0.0.1:7243/ingest/0c33703e-a3cc-4523-b6f9-7493b9ad5593', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                sessionId: 'debug-session',
-                runId: 'run1',
-                hypothesisId: 'H61',
-                location: 'ifc-lite-mesh-collector.ts:onBatch',
-                message: 'onBatch RTC read + translate computed (first batch for model)',
-                data: { activeJobId, activeModelIndex, r0, hasRtc, rtcYUp, commonJobId: g.__ifcChecker_commonRtcJobId ?? null, translateYUp },
-                timestamp: Date.now(),
-              }),
-            }).catch(() => {});
-            // #endregion
-          }
-
-          if (!rtcLogged) {
-            rtcLogged = true;
-            // #region agent log (debug)
-            fetch('http://127.0.0.1:7243/ingest/0c33703e-a3cc-4523-b6f9-7493b9ad5593', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                sessionId: 'debug-session',
-                runId: 'run1',
-                hypothesisId: 'H6',
-                location: 'ifc-lite-mesh-collector.ts:onBatch',
-                message: 'rtc offsets + translation computed',
-                data: { activeJobId, activeModelIndex, rtc, rtcYUp, common, translateYUp },
-                timestamp: Date.now(),
-              }),
-            }).catch(() => {});
-            // #endregion
-          }
         } catch {
-          // #region agent log (debug)
-          try {
-            const g: any = globalThis as any;
-            fetch('http://127.0.0.1:7243/ingest/0c33703e-a3cc-4523-b6f9-7493b9ad5593', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                sessionId: 'debug-session',
-                runId: 'run1',
-                hypothesisId: 'H62',
-                location: 'ifc-lite-mesh-collector.ts:onBatch',
-                message: 'RTC translation compute failed; translateYUp=null',
-                data: { activeJobId: g?.__ifcChecker_activeModelJobId ?? null, activeModelIndex: g?.__ifcChecker_activeModelIndex ?? null },
-                timestamp: Date.now(),
-              }),
-            }).catch(() => {});
-          } catch {}
-          // #endregion
           translateYUp = null;
+          this.lastRtcFrameInfo = null;
         }
 
         // Convert WASM meshes to MeshData[]
@@ -366,6 +423,21 @@ export class IfcLiteMeshCollector {
             const positions = mesh.positions;
             const normals = mesh.normals;
             const indices = mesh.indices;
+
+            // If RTC came from JS fallback (WASM did not apply it), subtract RTC in IFC coords BEFORE axis conversion.
+            // This keeps the shift consistent for the whole mesh (never per-vertex thresholding).
+            if (rtcSource === 'js' && rtc?.hasRtc) {
+              const ox = Number(rtc.x ?? 0);
+              const oy = Number(rtc.y ?? 0);
+              const oz = Number(rtc.z ?? 0);
+              if (ox !== 0 || oy !== 0 || oz !== 0) {
+                for (let i = 0; i < positions.length; i += 3) {
+                  positions[i] = positions[i] - ox;
+                  positions[i + 1] = positions[i + 1] - oy;
+                  positions[i + 2] = positions[i + 2] - oz;
+                }
+              }
+            }
 
             // Convert IFC Z-up to WebGL Y-up, and translate into common RTC frame.
             // Translation applies to positions only, not normals.
