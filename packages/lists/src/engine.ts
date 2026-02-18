@@ -1,0 +1,337 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+/**
+ * List execution engine - resolves source sets and extracts column values
+ *
+ * PERF: Uses ListDataProvider.getEntitiesByType() for O(typeRange) entity lookups,
+ * and property/quantity accessors for O(1) lookups per entity.
+ */
+
+import type { PropertySet, QuantitySet } from '@ifc-lite/data';
+import { parsePropertyValue } from '@ifc-lite/encoding';
+import type {
+  ListDataProvider,
+  ListDefinition,
+  ListResult,
+  ListRow,
+  CellValue,
+  PropertyCondition,
+  ColumnDefinition,
+} from './types.js';
+
+/**
+ * Execute a list definition against a data provider.
+ * Returns a flat table result with matched entities and column values.
+ */
+export function executeList(
+  definition: ListDefinition,
+  provider: ListDataProvider,
+  modelId = 'default',
+): ListResult {
+  const startTime = performance.now();
+
+  // Step 1: Resolve source set (which entities match)
+  const matchedIds = resolveSourceSet(definition, provider);
+
+  // Step 2: Extract column values for matched entities
+  const rows: ListRow[] = new Array(matchedIds.length);
+
+  for (let i = 0; i < matchedIds.length; i++) {
+    const entityId = matchedIds[i];
+    const values = extractColumnValues(definition.columns, entityId, provider);
+    rows[i] = { entityId, modelId, values };
+  }
+
+  // Step 3: Sort if configured
+  if (definition.sortBy) {
+    const colIndex = definition.columns.findIndex(c => c.id === definition.sortBy!.columnId);
+    if (colIndex >= 0) {
+      const dir = definition.sortBy.direction === 'asc' ? 1 : -1;
+      rows.sort((a, b) => compareCellValues(a.values[colIndex], b.values[colIndex]) * dir);
+    }
+  }
+
+  return {
+    columns: definition.columns,
+    rows,
+    totalCount: rows.length,
+    executionTime: performance.now() - startTime,
+  };
+}
+
+// ============================================================================
+// Source Set Resolution
+// ============================================================================
+
+function resolveSourceSet(definition: ListDefinition, provider: ListDataProvider): number[] {
+  const { entityTypes, conditions } = definition;
+
+  // Collect entity IDs by type - gather arrays first, then flatten once
+  const chunks: number[][] = [];
+  for (const type of entityTypes) {
+    const ids = provider.getEntitiesByType(type);
+    if (ids.length > 0) chunks.push(ids);
+  }
+  const entityIds = chunks.length === 1 ? chunks[0] : chunks.flat();
+
+  // Apply conditions as filters
+  if (conditions.length === 0) {
+    return entityIds;
+  }
+
+  return entityIds.filter(id => matchesAllConditions(id, conditions, provider));
+}
+
+function matchesAllConditions(
+  entityId: number,
+  conditions: PropertyCondition[],
+  provider: ListDataProvider,
+): boolean {
+  for (const condition of conditions) {
+    if (!matchesCondition(entityId, condition, provider)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function matchesCondition(
+  entityId: number,
+  condition: PropertyCondition,
+  provider: ListDataProvider,
+): boolean {
+  const actualValue = getConditionValue(entityId, condition, provider);
+
+  if (condition.operator === 'exists') {
+    return actualValue !== null && actualValue !== undefined && actualValue !== '';
+  }
+
+  if (actualValue === null || actualValue === undefined) {
+    return false;
+  }
+
+  switch (condition.operator) {
+    case 'equals':
+      return String(actualValue) === String(condition.value);
+    case 'notEquals':
+      return String(actualValue) !== String(condition.value);
+    case 'contains':
+      return String(actualValue).toLowerCase().includes(String(condition.value).toLowerCase());
+    case 'gt':
+      return Number(actualValue) > Number(condition.value);
+    case 'lt':
+      return Number(actualValue) < Number(condition.value);
+    case 'gte':
+      return Number(actualValue) >= Number(condition.value);
+    case 'lte':
+      return Number(actualValue) <= Number(condition.value);
+    default:
+      return false;
+  }
+}
+
+function getConditionValue(
+  entityId: number,
+  condition: PropertyCondition,
+  provider: ListDataProvider,
+): CellValue {
+  switch (condition.source) {
+    case 'attribute':
+      return getAttributeValue(entityId, condition.propertyName, provider);
+    case 'property':
+      return getPropertyValue(entityId, condition.psetName ?? '', condition.propertyName, provider);
+    case 'quantity':
+      return getQuantityValue(entityId, condition.psetName ?? '', condition.propertyName, provider);
+    default:
+      return null;
+  }
+}
+
+// ============================================================================
+// Column Value Extraction
+// ============================================================================
+
+function extractColumnValues(
+  columns: ColumnDefinition[],
+  entityId: number,
+  provider: ListDataProvider,
+): CellValue[] {
+  // For efficiency, batch extract properties and quantities once per entity
+  const needsProperties = columns.some(c => c.source === 'property');
+  const needsQuantities = columns.some(c => c.source === 'quantity');
+
+  let psets: PropertySet[] | undefined;
+  let qsets: QuantitySet[] | undefined;
+
+  if (needsProperties) {
+    psets = provider.getPropertySets(entityId);
+  }
+  if (needsQuantities) {
+    qsets = provider.getQuantitySets(entityId);
+  }
+
+  const values: CellValue[] = new Array(columns.length);
+  for (let i = 0; i < columns.length; i++) {
+    const col = columns[i];
+    switch (col.source) {
+      case 'attribute':
+        values[i] = getAttributeValue(entityId, col.propertyName, provider);
+        break;
+      case 'property':
+        values[i] = findPropertyInSets(psets ?? [], col.psetName ?? '', col.propertyName);
+        break;
+      case 'quantity':
+        values[i] = findQuantityInSets(qsets ?? [], col.psetName ?? '', col.propertyName);
+        break;
+      default:
+        values[i] = null;
+    }
+  }
+  return values;
+}
+
+// ============================================================================
+// Value Accessors
+// ============================================================================
+
+function getAttributeValue(entityId: number, attrName: string, provider: ListDataProvider): CellValue {
+  switch (attrName) {
+    case 'Name':
+      return provider.getEntityName(entityId) || null;
+    case 'GlobalId':
+      return provider.getEntityGlobalId(entityId) || null;
+    case 'Class':
+      return provider.getEntityTypeName(entityId) || null;
+    case 'Description':
+      return provider.getEntityDescription(entityId) || null;
+    case 'ObjectType':
+      return provider.getEntityObjectType(entityId) || null;
+    case 'Tag':
+      return provider.getEntityTag(entityId) || null;
+    default:
+      return null;
+  }
+}
+
+function getPropertyValue(
+  entityId: number,
+  psetName: string,
+  propName: string,
+  provider: ListDataProvider,
+): CellValue {
+  const psets = provider.getPropertySets(entityId);
+  return findPropertyInSets(psets, psetName, propName);
+}
+
+function getQuantityValue(
+  entityId: number,
+  qsetName: string,
+  quantName: string,
+  provider: ListDataProvider,
+): CellValue {
+  const qsets = provider.getQuantitySets(entityId);
+  return findQuantityInSets(qsets, qsetName, quantName);
+}
+
+function findPropertyInSets(psets: PropertySet[], psetName: string, propName: string): CellValue {
+  for (const pset of psets) {
+    if (pset.name === psetName) {
+      for (const prop of pset.properties) {
+        if (prop.name === propName) {
+          return resolvePropertyValue(prop.value);
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve a raw IFC property value to a clean display value.
+ * Handles typed arrays [IFCTYPE, value], boolean enums (.T./.F./.U.),
+ * IFC string encodings, etc.
+ */
+function resolvePropertyValue(value: unknown): CellValue {
+  if (value === null || value === undefined) return null;
+
+  const parsed = parsePropertyValue(value);
+  const display = parsed.displayValue;
+
+  // Return null for em-dash (null indicator)
+  if (display === '\u2014') return null;
+
+  // Try to preserve numeric values for sorting
+  if (typeof value === 'number') return value;
+  if (typeof value === 'boolean') return display; // "True"/"False"
+
+  // For typed values like [IFCREAL, 5.3], check if the resolved value is numeric
+  if (Array.isArray(value) && value.length === 2 && typeof value[1] === 'number') {
+    return value[1];
+  }
+
+  return display;
+}
+
+/** Unit suffixes indexed by QuantityType enum */
+const QUANTITY_UNITS = ['m', 'm²', 'm³', '', 'kg', 's'];
+
+function findQuantityInSets(qsets: QuantitySet[], qsetName: string, quantName: string): CellValue {
+  for (const qset of qsets) {
+    if (qset.name === qsetName) {
+      for (const quant of qset.quantities) {
+        if (quant.name === quantName) {
+          return formatQuantityValue(quant.value, quant.type);
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function formatQuantityValue(value: number, _type: number): CellValue {
+  // Return raw number to preserve numeric sorting.
+  // Display formatting (locale, units) is handled by the UI layer.
+  return value;
+}
+
+// ============================================================================
+// Sorting
+// ============================================================================
+
+function compareCellValues(a: CellValue, b: CellValue): number {
+  if (a === null && b === null) return 0;
+  if (a === null) return -1;
+  if (b === null) return 1;
+
+  if (typeof a === 'number' && typeof b === 'number') {
+    return a - b;
+  }
+
+  return String(a).localeCompare(String(b));
+}
+
+// ============================================================================
+// CSV Export from List Result
+// ============================================================================
+
+export function listResultToCSV(result: ListResult, delimiter = ','): string {
+  const csvEscape = (val: CellValue): string => {
+    if (val === null || val === undefined) return '';
+    const str = String(val);
+    if (str.includes(delimiter) || str.includes('"') || str.includes('\n')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+
+  const headers = result.columns.map(c => csvEscape(c.label ?? `${c.psetName ? c.psetName + '.' : ''}${c.propertyName}`));
+  const lines = [headers.join(delimiter)];
+
+  for (const row of result.rows) {
+    lines.push(row.values.map(csvEscape).join(delimiter));
+  }
+
+  return lines.join('\n');
+}

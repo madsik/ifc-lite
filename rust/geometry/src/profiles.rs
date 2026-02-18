@@ -11,6 +11,10 @@ use crate::{Error, Point2, Point3, Result, Vector3};
 use ifc_lite_core::{AttributeValue, DecodedEntity, EntityDecoder, IfcSchema, IfcType, ProfileCategory};
 use std::f64::consts::PI;
 
+/// Maximum recursion depth for nested curve processing.
+/// Prevents stack overflow from deeply nested CompositeCurve → TrimmedCurve → CompositeCurve chains.
+const MAX_CURVE_DEPTH: u32 = 50;
+
 /// Profile processor - processes IFC profiles into 2D contours
 pub struct ProfileProcessor {
     schema: IfcSchema,
@@ -552,11 +556,27 @@ impl ProfileProcessor {
         curve: &DecodedEntity,
         decoder: &mut EntityDecoder,
     ) -> Result<Vec<Point2<f64>>> {
+        self.process_curve_with_depth(curve, decoder, 0)
+    }
+
+    /// Process curve with depth tracking to prevent stack overflow
+    fn process_curve_with_depth(
+        &self,
+        curve: &DecodedEntity,
+        decoder: &mut EntityDecoder,
+        depth: u32,
+    ) -> Result<Vec<Point2<f64>>> {
+        if depth > MAX_CURVE_DEPTH {
+            return Err(Error::geometry(format!(
+                "Curve nesting depth {} exceeds limit {}",
+                depth, MAX_CURVE_DEPTH
+            )));
+        }
         match curve.ifc_type {
             IfcType::IfcPolyline => self.process_polyline(curve, decoder),
             IfcType::IfcIndexedPolyCurve => self.process_indexed_polycurve(curve, decoder),
-            IfcType::IfcCompositeCurve => self.process_composite_curve(curve, decoder),
-            IfcType::IfcTrimmedCurve => self.process_trimmed_curve(curve, decoder),
+            IfcType::IfcCompositeCurve => self.process_composite_curve_with_depth(curve, decoder, depth),
+            IfcType::IfcTrimmedCurve => self.process_trimmed_curve_with_depth(curve, decoder, depth),
             IfcType::IfcCircle => self.process_circle_curve(curve, decoder),
             IfcType::IfcEllipse => self.process_ellipse_curve(curve, decoder),
             _ => Err(Error::geometry(format!(
@@ -573,13 +593,29 @@ impl ProfileProcessor {
         curve: &DecodedEntity,
         decoder: &mut EntityDecoder,
     ) -> Result<Vec<Point3<f64>>> {
+        self.get_curve_points_with_depth(curve, decoder, 0)
+    }
+
+    /// Get 3D curve points with depth tracking to prevent stack overflow
+    fn get_curve_points_with_depth(
+        &self,
+        curve: &DecodedEntity,
+        decoder: &mut EntityDecoder,
+        depth: u32,
+    ) -> Result<Vec<Point3<f64>>> {
+        if depth > MAX_CURVE_DEPTH {
+            return Err(Error::geometry(format!(
+                "Curve nesting depth {} exceeds limit {}",
+                depth, MAX_CURVE_DEPTH
+            )));
+        }
         match curve.ifc_type {
             IfcType::IfcPolyline => self.process_polyline_3d(curve, decoder),
-            IfcType::IfcCompositeCurve => self.process_composite_curve_3d(curve, decoder),
+            IfcType::IfcCompositeCurve => self.process_composite_curve_3d_with_depth(curve, decoder, depth),
             IfcType::IfcCircle => self.process_circle_3d(curve, decoder),
             IfcType::IfcTrimmedCurve => {
                 // For trimmed curve, get 2D points and convert to 3D
-                let points_2d = self.process_trimmed_curve(curve, decoder)?;
+                let points_2d = self.process_trimmed_curve_with_depth(curve, decoder, depth)?;
                 Ok(points_2d
                     .into_iter()
                     .map(|p| Point3::new(p.x, p.y, 0.0))
@@ -587,7 +623,7 @@ impl ProfileProcessor {
             }
             _ => {
                 // Fallback: try 2D curve and convert to 3D
-                let points_2d = self.process_curve(curve, decoder)?;
+                let points_2d = self.process_curve_with_depth(curve, decoder, depth)?;
                 Ok(points_2d
                     .into_iter()
                     .map(|p| Point3::new(p.x, p.y, 0.0))
@@ -766,10 +802,11 @@ impl ProfileProcessor {
     }
 
     /// Process composite curve into 3D points
-    fn process_composite_curve_3d(
+    fn process_composite_curve_3d_with_depth(
         &self,
         curve: &DecodedEntity,
         decoder: &mut EntityDecoder,
+        depth: u32,
     ) -> Result<Vec<Point3<f64>>> {
         // IfcCompositeCurve: Segments, SelfIntersect
         let segments_attr = curve
@@ -799,7 +836,7 @@ impl ProfileProcessor {
                 .map(|e| e == "T" || e == "TRUE")
                 .unwrap_or(true);
 
-            let mut segment_points = self.get_curve_points(&parent_curve, decoder)?;
+            let mut segment_points = self.get_curve_points_with_depth(&parent_curve, decoder, depth + 1)?;
 
             if !same_sense {
                 segment_points.reverse();
@@ -818,10 +855,11 @@ impl ProfileProcessor {
 
     /// Process trimmed curve
     /// IfcTrimmedCurve: BasisCurve, Trim1, Trim2, SenseAgreement, MasterRepresentation
-    fn process_trimmed_curve(
+    fn process_trimmed_curve_with_depth(
         &self,
         curve: &DecodedEntity,
         decoder: &mut EntityDecoder,
+        depth: u32,
     ) -> Result<Vec<Point2<f64>>> {
         // Get basis curve (attribute 0)
         let basis_attr = curve
@@ -851,8 +889,8 @@ impl ProfileProcessor {
                 self.process_trimmed_conic(&basis_curve, trim1, trim2, sense, decoder)
             }
             _ => {
-                // Fallback: try to process as a regular curve
-                self.process_curve(&basis_curve, decoder)
+                // Fallback: try to process as a regular curve (with depth tracking)
+                self.process_curve_with_depth(&basis_curve, decoder, depth + 1)
             }
         }
     }
@@ -1135,25 +1173,30 @@ impl ProfileProcessor {
         for segment in segments {
             // Each segment is either IFCLINEINDEX((i1,i2,...)) or IFCARCINDEX((i1,i2,i3))
             // Typed values are stored as List([String("IFCLINEINDEX"), List([indices...])])
-            // So we need to extract the inner list (skip the type name)
-            let indices = if let Some(segment_list) = segment.as_list() {
+            // So we need to extract the inner list AND check the type name
+            let (is_arc, indices) = if let Some(segment_list) = segment.as_list() {
                 // Check if this is a typed value: List([String(type_name), List([indices...])])
                 // Typed values like IFCLINEINDEX((1,2)) are stored as:
                 // List([String("IFCLINEINDEX"), List([Integer(1), Integer(2)])])
                 if segment_list.len() >= 2 {
                     // First element is type name (String), second is the actual indices list
+                    let type_name = segment_list.first()
+                        .and_then(|v| v.as_string())
+                        .unwrap_or("");
+                    let is_arc_type = type_name.to_uppercase().contains("ARC");
+                    
                     if let Some(AttributeValue::List(indices_list)) = segment_list.get(1) {
-                        Some(indices_list.as_slice())
+                        (is_arc_type, Some(indices_list.as_slice()))
                     } else {
                         // Fallback: maybe it's a direct list of indices (not typed)
-                        Some(segment_list)
+                        (false, Some(segment_list))
                     }
                 } else {
-                    // Single element or empty - treat as direct list
-                    Some(segment_list)
+                    // Single element or empty - treat as direct list (line)
+                    (false, Some(segment_list))
                 }
             } else {
-                None
+                (false, None)
             };
 
             if let Some(indices) = indices {
@@ -1162,8 +1205,8 @@ impl ProfileProcessor {
                     .filter_map(|v| v.as_float().map(|f| f as usize - 1)) // 1-indexed to 0-indexed
                     .collect();
 
-                if idx_values.len() == 3 {
-                    // Arc segment - 3 points define an arc
+                if is_arc && idx_values.len() == 3 {
+                    // Arc segment - 3 points define an arc (ONLY if type is IFCARCINDEX)
                     let p1 = all_points.get(idx_values[0]).copied();
                     let p2 = all_points.get(idx_values[1]).copied(); // Mid-point
                     let p3 = all_points.get(idx_values[2]).copied();
@@ -1193,7 +1236,7 @@ impl ProfileProcessor {
                         }
                     }
                 } else {
-                    // Line segment - add all points
+                    // Line segment - add all points (includes IFCLINEINDEX with any number of points)
                     for &idx in &idx_values {
                         if let Some(&pt) = all_points.get(idx) {
                             if result_points.last() != Some(&pt) {
@@ -1227,43 +1270,73 @@ impl ProfileProcessor {
 
         let d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
 
-        if d.abs() < 1e-10 {
+        // Check for collinearity using a RELATIVE tolerance based on the arc span
+        // The determinant d scales with the square of the point distances
+        let arc_span = ((p3.x - p1.x).powi(2) + (p3.y - p1.y).powi(2)).sqrt();
+        let collinear_tolerance = 1e-6 * arc_span.powi(2).max(1e-10);
+        
+        if d.abs() < collinear_tolerance {
             // Points are collinear - return as line
             return vec![p1, p2, p3];
         }
-
-        let ux = ((ax * ax + ay * ay) * (by - cy)
+        
+        // Calculate center
+        let ux_num = (ax * ax + ay * ay) * (by - cy)
             + (bx * bx + by * by) * (cy - ay)
-            + (cx * cx + cy * cy) * (ay - by))
-            / d;
-        let uy = ((ax * ax + ay * ay) * (cx - bx)
+            + (cx * cx + cy * cy) * (ay - by);
+        let uy_num = (ax * ax + ay * ay) * (cx - bx)
             + (bx * bx + by * by) * (ax - cx)
-            + (cx * cx + cy * cy) * (bx - ax))
-            / d;
-
+            + (cx * cx + cy * cy) * (bx - ax);
+        let ux = ux_num / d;
+        let uy = uy_num / d;
         let center = Point2::new(ux, uy);
         let radius = ((p1.x - center.x).powi(2) + (p1.y - center.y).powi(2)).sqrt();
+        
+        // If radius is more than 100x the arc span, the points are essentially collinear
+        if radius > arc_span * 100.0 {
+            return vec![p1, p2, p3];
+        }
 
         // Calculate angles
         let angle1 = (p1.y - center.y).atan2(p1.x - center.x);
         let angle3 = (p3.y - center.y).atan2(p3.x - center.x);
         let angle2 = (p2.y - center.y).atan2(p2.x - center.x);
 
-        // Determine arc direction
-        let start_angle = angle1;
-        let mut end_angle = angle3;
-
-        // Check if we need to go the long way around
-        let mid_check = angle1 + (angle3 - angle1) / 2.0;
-        let diff = (angle2 - mid_check).abs();
-        if diff > PI {
-            // Go the other way
-            if end_angle > start_angle {
-                end_angle -= 2.0 * PI;
-            } else {
-                end_angle += 2.0 * PI;
+        // Normalize angle difference to [-PI, PI]
+        fn normalize_angle(a: f64) -> f64 {
+            let mut a = a % (2.0 * PI);
+            if a > PI {
+                a -= 2.0 * PI;
+            } else if a < -PI {
+                a += 2.0 * PI;
             }
+            a
         }
+
+        // Determine if we should go clockwise or counterclockwise from angle1 to angle3
+        // The correct direction is the one that passes through angle2
+        let diff_direct = normalize_angle(angle3 - angle1);
+        let diff_to_mid = normalize_angle(angle2 - angle1);
+        
+        let go_direct = if diff_direct > 0.0 {
+            // Direct path is counterclockwise (positive angles)
+            diff_to_mid > 0.0 && diff_to_mid < diff_direct
+        } else {
+            // Direct path is clockwise (negative angles)
+            diff_to_mid < 0.0 && diff_to_mid > diff_direct
+        };
+
+        let start_angle = angle1;
+        let end_angle = if go_direct {
+            angle1 + diff_direct
+        } else {
+            // Go the other way around
+            if diff_direct > 0.0 {
+                angle1 + diff_direct - 2.0 * PI
+            } else {
+                angle1 + diff_direct + 2.0 * PI
+            }
+        };
 
         // Generate arc points
         let mut points = Vec::with_capacity(num_segments + 1);
@@ -1281,10 +1354,11 @@ impl ProfileProcessor {
 
     /// Process composite curve into 2D points
     /// IfcCompositeCurve: Segments (list of IfcCompositeCurveSegment), SelfIntersect
-    fn process_composite_curve(
+    fn process_composite_curve_with_depth(
         &self,
         curve: &DecodedEntity,
         decoder: &mut EntityDecoder,
+        depth: u32,
     ) -> Result<Vec<Point2<f64>>> {
         // Get segments list (attribute 0)
         let segments_attr = curve
@@ -1320,8 +1394,8 @@ impl ProfileProcessor {
                 })
                 .unwrap_or(true);
 
-            // Process the parent curve
-            let mut segment_points = self.process_curve(&parent_curve, decoder)?;
+            // Process the parent curve (with depth tracking)
+            let mut segment_points = self.process_curve_with_depth(&parent_curve, decoder, depth + 1)?;
 
             if !same_sense {
                 segment_points.reverse();

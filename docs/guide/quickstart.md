@@ -2,6 +2,9 @@
 
 Get up and running with IFClite in under 5 minutes. Choose your path based on your use case.
 
+!!! tip "Beyond Single-Model Viewing"
+    IFClite also supports **multi-model federation** (loading and coordinating multiple IFC files), **BCF** (BIM Collaboration Format) for issue tracking, and **IDS** (Information Delivery Specification) for model validation. See the [Next Steps](#next-steps) section for links to these guides.
+
 ## Choose Your Approach
 
 | | Client-Side | Server + Client |
@@ -332,13 +335,11 @@ import { parseIfcx, detectFormat } from '@ifc-lite/ifcx';
 const result = await parseAuto(buffer);
 
 if (result.format === 'ifcx') {
-  // IFC5 file
-  const { entities, meshes, spatialHierarchy } = result;
-  console.log('IFC5 with', meshes.length, 'pre-tessellated meshes');
+  // IFC5 file (result.data is IfcxParseResult)
+  console.log('IFC5 with', result.meshes.length, 'pre-tessellated meshes');
 } else {
-  // IFC4 STEP file
-  const { store } = result;
-  console.log('IFC4 with', store.entityCount, 'entities');
+  // IFC4 STEP file (result.data is IfcDataStore)
+  console.log('IFC4 with', result.data.entityCount, 'entities');
 }
 
 // Or parse IFCX directly
@@ -449,6 +450,9 @@ renderer.render({
 });
 ```
 
+!!! tip "Basket Isolation in the Viewer App"
+    The viewer app provides an interactive **basket** for building isolation sets incrementally. Use `I` to set, `+` to add, `-` to remove entities. Cmd/Ctrl+Click to multi-select, then use basket shortcuts on the whole selection. See the [Rendering Guide](rendering.md#basket-isolation-viewer-app) for details.
+
 ## Data Flow Diagram
 
 ```mermaid
@@ -537,3 +541,8 @@ try {
 - [Geometry Guide](geometry.md) - Geometry processing details
 - [Rendering Guide](rendering.md) - WebGPU rendering features
 - [Query Guide](querying.md) - Query entities and properties
+- [Federation Guide](federation.md) - Multi-model loading and coordination
+- [BCF Guide](bcf.md) - BIM Collaboration Format for issue tracking
+- [IDS Guide](ids.md) - Information Delivery Specification for validation
+- [2D Drawing Guide](drawing-2d.md) - Generate 2D drawings from models
+- [Mutations Guide](mutations.md) - Programmatic model modifications

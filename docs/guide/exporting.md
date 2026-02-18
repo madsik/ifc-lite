@@ -65,30 +65,37 @@ Export IFC to GLB directly in the browser with zero setup:
 
 ## Overview
 
-IFClite supports multiple export formats:
+IFClite supports multiple export formats, as well as GLB import for loading existing 3D assets:
 
 ```mermaid
 flowchart LR
     subgraph Input["Input"]
         IFC["ParseResult"]
+        GLBIn["GLB Import"]
     end
 
     subgraph Formats["Export Formats"]
         glTF["glTF/GLB"]
+        IFCOut["IFC (roundtrip)"]
         Parquet["Apache Parquet"]
+        Arrow["Apache Arrow"]
         JSON["JSON-LD"]
         CSV["CSV"]
     end
 
     subgraph Uses["Use Cases"]
         Viewer["3D Viewers"]
+        Roundtrip["IFC Roundtrip"]
         Analytics["Data Analytics"]
         Linked["Linked Data"]
         Spreadsheet["Spreadsheets"]
     end
 
+    GLBIn --> Viewer
     IFC --> glTF --> Viewer
+    IFC --> IFCOut --> Roundtrip
     IFC --> Parquet --> Analytics
+    IFC --> Arrow --> Analytics
     IFC --> JSON --> Linked
     IFC --> CSV --> Spreadsheet
 ```
@@ -359,6 +366,88 @@ await saveFile('quantities.csv', quantsCsv);
 expressId,type,globalId,name,IsExternal,FireRating,LoadBearing
 123,IFCWALL,2O2Fr$t4X7Zf8NOew3FL9r,Wall-001,true,60,true
 456,IFCWALLSTANDARDCASE,3P3Gs$u5Y8Ag9PQfx4GM0s,Wall-002,false,30,false
+```
+
+## IFC Export
+
+Export back to IFC format for roundtrip workflows and interoperability with other BIM tools:
+
+```typescript
+import { StepExporter } from '@ifc-lite/export';
+
+const exporter = new StepExporter(dataStore, sourceBuffer);
+
+// Full export
+const result = exporter.export();
+await saveFile('model.ifc', result.content);
+
+// Visible-only export (exclude hidden entities)
+const visibleResult = exporter.export({
+  visibleOnly: true,
+  hiddenEntityIds: hiddenSet,       // Set<number> of local expressIds
+  isolatedEntityIds: isolatedSet,   // Set<number> | null
+});
+await saveFile('visible_only.ifc', visibleResult.content);
+```
+
+### Visible-Only Export
+
+When `visibleOnly` is enabled, the exporter:
+
+1. Always includes infrastructure (units, owner history) and spatial structure
+2. Checks each product entity against `hiddenEntityIds` / `isolatedEntityIds`
+3. Walks `#ID` references transitively to include all dependent geometry, properties, and materials
+4. Collects `IfcStyledItem` entities via reverse reference pass (preserves colors/materials)
+5. Propagates visibility to openings via `IfcRelVoidsElement` (hidden slab = hidden openings)
+
+Supports all 202 `IfcProduct` subtypes from IFC4 and IFC4X3 schemas, including infrastructure types (bridges, roads, railways, marine facilities).
+
+### Multi-Model Merged Export
+
+Merge multiple IFC models into a single file:
+
+```typescript
+import { MergedExporter } from '@ifc-lite/export';
+
+const exporter = new MergedExporter();
+const result = await exporter.export([
+  { dataStore: store1, source: buffer1, name: 'Architecture' },
+  { dataStore: store2, source: buffer2, name: 'Structure' },
+], {
+  visibleOnly: true,
+  hiddenEntityIds: hiddenSet,
+  isolatedEntityIds: isolatedSet,
+});
+await saveFile('merged.ifc', result.content);
+```
+
+## GLB Import
+
+Load existing GLB files for viewing alongside IFC models:
+
+```typescript
+import { GlbImporter } from '@ifc-lite/import';
+
+const importer = new GlbImporter();
+const glbBuffer = await fetch('model.glb').then(r => r.arrayBuffer());
+const meshes = await importer.import(new Uint8Array(glbBuffer));
+
+// Add imported meshes to the renderer
+renderer.addMeshes(meshes);
+```
+
+## Arrow Export
+
+Export to Apache Arrow for in-memory analytics and streaming pipelines:
+
+```typescript
+import { ArrowExporter } from '@ifc-lite/export';
+
+const exporter = new ArrowExporter();
+const arrowBuffer = await exporter.exportEntities(parseResult);
+
+// Use with Arrow-compatible tools (DuckDB, DataFusion, etc.)
+await saveFile('entities.arrow', arrowBuffer);
 ```
 
 ## Custom Export

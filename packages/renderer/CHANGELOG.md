@@ -1,5 +1,136 @@
 # @ifc-lite/renderer
 
+## 1.8.0
+
+### Minor Changes
+
+- [#213](https://github.com/louistrue/ifc-lite/pull/213) [`7ae9711`](https://github.com/louistrue/ifc-lite/commit/7ae971119ad92c05c521a4931105a9a977ffc667) Thanks [@louistrue](https://github.com/louistrue)! - Add basket-based multi-isolation with incremental add/remove
+
+  - Basket isolation system: build an isolation set incrementally with `=` (set), `+` (add), `−` (remove) via keyboard, toolbar, or context menu
+  - Cmd/Ctrl+Click multi-select feeds directly into basket operations — select multiple entities, then press `+` to add them all
+  - Spacebar as additional shortcut to hide selected entity (alongside Delete/Backspace)
+  - Escape now clears basket along with selection and filters
+  - Toolbar shows active basket with entity count badge; context menu exposes Set/Add/Remove actions per entity
+  - Unified EntityRef resolution via `resolveEntityRef()` — single source of truth for globalId-to-model mapping across all UI surfaces
+  - Fix: Cmd+Click multi-select now works reliably in all model configurations (single-model, multi-model, legacy)
+
+- [#205](https://github.com/louistrue/ifc-lite/pull/205) [`06ddd81`](https://github.com/louistrue/ifc-lite/commit/06ddd81ce922d8f356836d04ff634cba45520a81) Thanks [@louistrue](https://github.com/louistrue)! - Add flexible lens coloring system with GPU overlay rendering
+
+  - Color overlay system: renders lens colors on top of original geometry using depth-equal pipeline, eliminating batch rebuild and framerate drops
+  - Auto-color by any IFC data: properties, quantities, classifications, materials, attributes, and class
+  - Dynamic discovery of available data from loaded models (lazy on-demand for properties, quantities, classifications, materials)
+  - Classification system selector in AutoColorEditor (separates Uniclass/OmniClass)
+  - Unlimited unique colors with sortable legend
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @ifc-lite/geometry@1.8.0
+  - @ifc-lite/spatial@1.8.0
+  - @ifc-lite/wasm@1.8.0
+
+## 1.7.0
+
+### Minor Changes
+
+- [#204](https://github.com/louistrue/ifc-lite/pull/204) [`057bde9`](https://github.com/louistrue/ifc-lite/commit/057bde9e48f64c07055413c690c6bdabb6942d04) Thanks [@louistrue](https://github.com/louistrue)! - Add orthographic projection, pinboard, lens, type tree, and floorplan views
+
+  ### Renderer
+
+  - Orthographic reverse-Z projection matrix in math utilities
+  - Camera projection mode toggle (perspective/orthographic) with seamless switching
+  - Orthographic zoom scales view size instead of camera distance
+  - Parallel ray unprojection for orthographic picking
+
+  ### Viewer
+
+  - **Orthographic projection**: Toggle button, unified Views dropdown, numpad `5` keyboard shortcut
+  - **Automatic Floorplan**: Per-storey section cuts with top-down ortho view, dropdown in toolbar
+  - **Pinboard**: Selection basket with Pin/Unpin/Show, entity isolation via serialized EntityRef Set
+  - **Tree View by Type**: IFC type grouping mode alongside spatial hierarchy, localStorage persistence
+  - **Lens**: Rule-based 3D colorization/filtering with built-in presets (By IFC Type, Structural Elements), full panel UI with color legend and rule evaluation engine
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @ifc-lite/geometry@1.7.0
+  - @ifc-lite/spatial@1.7.0
+  - @ifc-lite/wasm@1.7.0
+
+## 1.5.0
+
+### Minor Changes
+
+- [#162](https://github.com/louistrue/ifc-lite/pull/162) [`463e7c9`](https://github.com/louistrue/ifc-lite/commit/463e7c934abc2fccd0a35a8eab04fbae47185259) Thanks [@louistrue](https://github.com/louistrue)! - Add symbolic representation support for 2D drawings
+
+  - **New Feature**: Added `parseSymbolicRepresentations` WASM API to extract 2D Plan, Annotation, and FootPrint representations from IFC files
+  - **New Feature**: Section2DPanel now supports toggling between section cuts and symbolic representations (architectural floor plans)
+  - **New Feature**: Added hybrid mode that combines section cuts with symbolic representations
+  - **New Feature**: Building rotation detection from IfcSite placement for proper floor plan orientation
+  - **Enhancement**: RTC offset streaming events for better coordinate handling in large models
+  - **Enhancement**: Geometry processor now reports building rotation in coordinate info
+  - **Types**: Added `SymbolicRepresentationCollection`, `SymbolicPolyline`, `SymbolicCircle` types
+
+### Patch Changes
+
+- Updated dependencies [[`463e7c9`](https://github.com/louistrue/ifc-lite/commit/463e7c934abc2fccd0a35a8eab04fbae47185259)]:
+  - @ifc-lite/geometry@1.5.0
+  - @ifc-lite/wasm@1.5.0
+
+## 1.4.0
+
+### Patch Changes
+
+- 0191843: feat: Add BCF (BIM Collaboration Format) support
+
+  Adds full BCF 2.1 support for issue tracking and collaboration in BIM workflows:
+
+  **BCF Package (@ifc-lite/bcf):**
+
+  - Read/write BCF 2.1 .bcfzip files
+  - Full viewpoint support with camera position, components, and clipping planes
+  - Coordinate system conversion between Y-up (viewer) and Z-up (IFC/BCF)
+  - Support for multiple snapshot naming conventions
+  - IFC GlobalId mapping for component references
+
+  **Viewer Integration:**
+
+  - BCF panel integrated into properties panel area (resizable, same layout)
+  - Topic management with filtering and status updates
+  - Viewpoint capture with camera state, selection, and snapshot
+  - Viewpoint activation with smooth camera animation and visibility state
+  - Import/export BCF files compatible with BIMcollab and other tools
+  - Email setup nudge in empty state for easy author configuration
+  - Smart filename generation using model name for downloads
+
+  **Renderer Fixes:**
+
+  - Fix screenshot distortion caused by WebGPU texture row alignment
+  - Add GPU-synchronized screenshot capture for accurate snapshots
+
+  **Parser Fixes:**
+
+  - Extract GlobalIds for all geometry entities (not just spatial) to enable BCF component references
+
+  **Bug Fixes:**
+
+  - Fix BCF viewpoint visibility not clearing isolation mode
+  - Add localStorage error handling for private browsing mode
+  - Fix BCF XML schema compliance for BIMcollab compatibility:
+    - Correct element order (Selection before Visibility)
+    - Move ViewSetupHints to Components level (not inside Visibility)
+    - Write OriginatingSystem/AuthoringToolId as child elements (not attributes)
+    - Always include required Visibility element
+
+- c6a3a95: feat: Add shift+drag orthogonal constraint for measurements
+
+  When in measure mode, holding Shift while dragging constrains measurements to orthogonal axes (X, Y, Z). This enables precise horizontal, vertical, and depth measurements.
+
+  - Visual axis indicators show available constraint directions (red=X, green=Y, blue=Z)
+  - Snaps to edges and vertices in orthogonal mode for precision
+  - Shift+drag before first point allows camera orbit
+  - Adaptive performance optimization for complex models
+
 ## 1.3.0
 
 ### Patch Changes

@@ -53,6 +53,13 @@
 | **Streaming Pipeline** | Progressive geometry processing. First triangles in 300-500ms |
 | **WebGPU Rendering** | Modern GPU-accelerated 3D with depth testing and frustum culling |
 | **Zero-Copy GPU** | Direct WASM memory to GPU buffers, 60-70% less RAM |
+| **Multi-Model Federation** | Load multiple IFC files with unified selection, visibility, and ID management |
+| **Basket Isolation** | Incremental isolation set with `=` set / `+` add / `-` remove, Cmd+Click multi-select |
+| **BCF Collaboration** | BIM Collaboration Format support with topics, viewpoints, and comments |
+| **IDS Validation** | Information Delivery Specification checking against IFC data |
+| **2D Drawings** | Section cuts, floor plans, and elevations with interactive annotations (measure, area, text, clouds) |
+| **Property Editing** | Edit IFC properties in-place with bidirectional change tracking |
+| **IFC Export** | Visible-only and merged multi-model export with full IFC4/IFC4X3 schema coverage |
 
 ## Quick Start
 
@@ -86,9 +93,9 @@ npm install @ifc-lite/parser
 import { IfcParser } from '@ifc-lite/parser';
 
 const parser = new IfcParser();
-const result = parser.parse(ifcBuffer);
+const result = await parser.parse(ifcBuffer);
 
-console.log(`Found ${result.entities.length} entities`);
+console.log(`Found ${result.entityCount} entities`);
 ```
 
 For full 3D rendering, add geometry and renderer packages:
@@ -161,15 +168,16 @@ import { Renderer } from '@ifc-lite/renderer';
 
 // Parse IFC file
 const parser = new IfcParser();
-const result = parser.parse(ifcArrayBuffer);
+const result = await parser.parse(ifcArrayBuffer);
 
-// Access entities
-const walls = result.entities.filter(e => e.type === 'IFCWALL');
+// Access entities (Map<expressId, IfcEntity>)
+const walls = [...result.entities.values()].filter(e => e.type === 'IFCWALL');
 console.log(`Found ${walls.length} walls`);
 
-// Render geometry (requires @ifc-lite/renderer)
+// Render geometry (requires @ifc-lite/renderer + @ifc-lite/geometry)
 const renderer = new Renderer(canvas);
-await renderer.loadGeometry(result.geometry);
+await renderer.init();
+renderer.loadGeometry(meshData); // MeshData[] from geometry processing
 renderer.render();
 ```
 
@@ -178,40 +186,56 @@ renderer.render();
 | Resource | Description |
 |----------|-------------|
 | [**Quick Start**](docs/guide/quickstart.md) | Parse your first IFC file in 5 minutes |
-| [**Installation**](docs/guide/installation.md) | Detailed setup for npm, Cargo, and from source |
-| [**User Guide**](https://louistrue.github.io/ifc-lite/) | Complete guides: parsing, geometry, rendering, querying |
+| [**Installation**](docs/guide/installation.md) | Detailed setup for npm, Cargo, Docker, and from source |
+| [**User Guide**](https://louistrue.github.io/ifc-lite/) | Parsing, geometry, rendering, querying, BCF, IDS, 2D drawings |
+| [**Federation**](docs/guide/federation.md) | Multi-model loading with unified selection and visibility |
+| [**Desktop App**](docs/guide/desktop.md) | Native Tauri app with multi-threading and filesystem access |
 | [**Tutorials**](docs/tutorials/building-viewer.md) | Build a viewer, custom queries, extend the parser |
 | [**Architecture**](docs/architecture/overview.md) | System design with detailed diagrams |
-| [**API Reference**](docs/api/typescript.md) | TypeScript, Rust, and WASM API docs |
-| [**Contributing**](docs/contributing/setup.md) | Development setup and testing guide |
+| [**API Reference**](docs/api/typescript.md) | TypeScript (18 packages), Rust, and WASM API docs |
+| [**Contributing**](docs/contributing/setup.md) | Development setup, testing, and release process |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    IFC[IFC File] --> Tokenize
+    IFC[IFC/IFCX Files] --> Tokenize
     Tokenize --> Scan --> Decode
     Decode --> Tables[Columnar Tables]
     Decode --> Graph[Relationship Graph]
-    Tables --> Renderer[WebGPU Renderer]
-    Graph --> Export[glTF / Parquet]
-    
+    Tables --> Federation[Multi-Model Federation]
+    Federation --> Renderer[WebGPU Renderer]
+    Federation --> Drawing2D[2D Drawings]
+    Graph --> Export[glTF / Parquet / IFC]
+
+    BCF[BCF File] --> Viewer
+    IDS[IDS Rules] --> Validator[IDS Validator]
+    Validator --> Viewer
+    Renderer --> Viewer[Viewer App]
+
     style IFC fill:#6366f1,stroke:#312e81,color:#fff
     style Tokenize fill:#2563eb,stroke:#1e3a8a,color:#fff
     style Scan fill:#2563eb,stroke:#1e3a8a,color:#fff
     style Decode fill:#10b981,stroke:#064e3b,color:#fff
     style Tables fill:#f59e0b,stroke:#7c2d12,color:#fff
     style Graph fill:#f59e0b,stroke:#7c2d12,color:#fff
+    style Federation fill:#f59e0b,stroke:#7c2d12,color:#fff
     style Renderer fill:#a855f7,stroke:#581c87,color:#fff
+    style Drawing2D fill:#a855f7,stroke:#581c87,color:#fff
     style Export fill:#a855f7,stroke:#581c87,color:#fff
+    style BCF fill:#ec4899,stroke:#831843,color:#fff
+    style IDS fill:#ec4899,stroke:#831843,color:#fff
+    style Validator fill:#ec4899,stroke:#831843,color:#fff
+    style Viewer fill:#06b6d4,stroke:#164e63,color:#fff
 ```
 
-IFC files flow through three processing layers. See the [Architecture Documentation](docs/architecture/overview.md) for detailed diagrams including data flow, memory model, and threading.
+IFC files flow through parsing, data storage, and rendering layers. Multiple models can be loaded simultaneously via federation. BCF and IDS provide collaboration and validation capabilities. See the [Architecture Documentation](docs/architecture/overview.md) for detailed diagrams.
 
 > **Deep Dive**: [Data Flow](docs/architecture/data-flow.md) ·
 > [Parsing Pipeline](docs/architecture/parsing-pipeline.md) ·
 > [Geometry Pipeline](docs/architecture/geometry-pipeline.md) ·
-> [Rendering Pipeline](docs/architecture/rendering-pipeline.md)
+> [Rendering Pipeline](docs/architecture/rendering-pipeline.md) ·
+> [Federation](docs/architecture/federation.md)
 
 ## Server Paradigm
 
@@ -280,21 +304,29 @@ docker run -p 3001:3001 ghcr.io/louistrue/ifc-lite-server
 ```
 ifc-lite/
 ├── rust/                      # Rust/WASM backend
-│   ├── core/                  # IFC/STEP parsing (~2,000 LOC)
-│   ├── geometry/              # Geometry processing (~2,500 LOC)
-│   └── wasm-bindings/         # JavaScript API (~800 LOC)
+│   ├── core/                  # IFC/STEP parsing
+│   ├── geometry/              # Geometry processing
+│   └── wasm-bindings/         # JavaScript API
 │
-├── packages/                  # TypeScript packages
+├── packages/                  # TypeScript packages (18)
 │   ├── parser/                # High-level IFC parser
+│   ├── ifcx/                  # IFC5 (IFCX) JSON parser
 │   ├── geometry/              # Geometry bridge (WASM)
 │   ├── renderer/              # WebGPU rendering
-│   ├── cache/                 # Binary cache format
-│   ├── server-client/         # Server SDK (caching, streaming)
-│   ├── query/                 # Query system
 │   ├── data/                  # Columnar data structures
 │   ├── spatial/               # Spatial indexing
-│   ├── export/                # Export formats
-│   └── codegen/               # Schema generator
+│   ├── query/                 # Query system
+│   ├── cache/                 # Binary cache format
+│   ├── export/                # Export formats (glTF, Parquet)
+│   ├── bcf/                   # BIM Collaboration Format
+│   ├── ids/                   # IDS validation
+│   ├── mutations/             # Property editing & change tracking
+│   ├── drawing-2d/            # 2D drawings (sections, plans)
+│   ├── codegen/               # EXPRESS schema generator
+│   ├── wasm/                  # WASM bindings package
+│   ├── server-client/         # Server SDK (caching, streaming)
+│   ├── server-bin/            # Pre-built server binary
+│   └── create-ifc-lite/       # Project scaffolding CLI
 │
 ├── apps/
 │   ├── viewer/                # React web application
@@ -473,12 +505,19 @@ bash scripts/build-wasm.sh  # Rebuild WASM after Rust changes
 | `@ifc-lite/ifcx` | IFC5 (IFCX) parser with ECS composition | 🚧 Beta | [API](docs/api/typescript.md#ifcx) |
 | `@ifc-lite/geometry` | Geometry processing bridge | ✅ Stable | [API](docs/api/typescript.md#geometry) |
 | `@ifc-lite/renderer` | WebGPU rendering pipeline | ✅ Stable | [API](docs/api/typescript.md#renderer) |
-| `@ifc-lite/cache` | Binary cache for instant loading | ✅ Stable | [API](docs/api/typescript.md#cache) |
-| `@ifc-lite/query` | Fluent & SQL query system | 🚧 Beta | [API](docs/api/typescript.md#query) |
 | `@ifc-lite/data` | Columnar data structures | ✅ Stable | [API](docs/api/typescript.md#data) |
 | `@ifc-lite/spatial` | Spatial indexing & culling | 🚧 Beta | [API](docs/api/typescript.md#spatial) |
-| `@ifc-lite/export` | Export (glTF, Parquet, etc.) | 🚧 Beta | [API](docs/api/typescript.md#export) |
+| `@ifc-lite/query` | Fluent & SQL query system | 🚧 Beta | [API](docs/api/typescript.md#query) |
+| `@ifc-lite/cache` | Binary cache for instant loading | ✅ Stable | [API](docs/api/typescript.md#cache) |
+| `@ifc-lite/export` | Export (glTF, Parquet, IFC) with visible-only filtering | 🚧 Beta | [API](docs/api/typescript.md#export) |
+| `@ifc-lite/bcf` | BIM Collaboration Format (topics, viewpoints) | 🚧 Beta | [Guide](docs/guide/bcf.md) |
+| `@ifc-lite/ids` | IDS validation against IFC data | 🚧 Beta | [Guide](docs/guide/ids.md) |
+| `@ifc-lite/mutations` | Property editing & change tracking | 🚧 Beta | [Guide](docs/guide/mutations.md) |
+| `@ifc-lite/drawing-2d` | 2D section cuts, floor plans, elevations | 🚧 Beta | [Guide](docs/guide/drawing-2d.md) |
+| `@ifc-lite/wasm` | WASM bindings for Rust core | ✅ Stable | [API](docs/api/wasm.md) |
+| `@ifc-lite/codegen` | Code generation from EXPRESS schemas | ✅ Stable | [API](docs/api/typescript.md#codegen) |
 | `@ifc-lite/server-client` | Server SDK with caching & streaming | ✅ Stable | [API](docs/api/typescript.md#server-client) |
+| `@ifc-lite/server-bin` | Pre-built server binary distribution | ✅ Stable | [Guide](docs/guide/server.md) |
 
 ## Rust Crates
 

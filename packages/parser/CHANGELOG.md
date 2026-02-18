@@ -1,5 +1,97 @@
 # @ifc-lite/parser
 
+## 1.8.0
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @ifc-lite/data@1.8.0
+  - @ifc-lite/ifcx@1.8.0
+
+## 1.7.0
+
+### Minor Changes
+
+- [#200](https://github.com/louistrue/ifc-lite/pull/200) [`6c43c70`](https://github.com/louistrue/ifc-lite/commit/6c43c707ead13fc482ec367cb08d847b444a484a) Thanks [@louistrue](https://github.com/louistrue)! - Add schema-aware property editing, full property panel display, and document/relationship support
+
+  - Property editor validates against IFC4 standard (ISO 16739-1:2018): walls get wall psets, doors get door psets, etc.
+  - Schema-version-aware property editing: detects IFC2X3/IFC4/IFC4X3 from FILE_SCHEMA header
+  - New dialogs for adding classifications (12 standard systems), materials, and quantities in edit mode
+  - Quantity set definitions (Qto\_) with schema-aware dialog for standard IFC4 base quantities
+  - On-demand classification extraction from IfcRelAssociatesClassification with chain walking
+  - On-demand material extraction supporting all IFC material types: IfcMaterial, IfcMaterialLayerSet, IfcMaterialProfileSet, IfcMaterialConstituentSet, IfcMaterialList, and \*Usage wrappers
+  - On-demand document extraction from IfcRelAssociatesDocument with DocumentReference→DocumentInformation chain
+  - Type-level property merging: properties from IfcTypeObject HasPropertySets merged with instance properties
+  - Structural relationship display: openings, fills, groups, and connections
+  - Advanced property type parsing: IfcPropertyEnumeratedValue, BoundedValue, ListValue, TableValue, ReferenceValue
+  - Georeferencing display (IfcMapConversion + IfcProjectedCRS) in model metadata panel
+  - Length unit display in model metadata panel
+  - Classifications, materials, documents displayed with dedicated card components
+  - Type-level material/classification inheritance via IfcRelDefinesByType
+  - Relationship graph fallback for server-loaded models without on-demand maps
+  - Cycle detection in material resolution and classification chain walking
+  - Removed `any` types from parser production code in favor of proper `PropertyValue` union type
+
+### Patch Changes
+
+- [#202](https://github.com/louistrue/ifc-lite/pull/202) [`e0af898`](https://github.com/louistrue/ifc-lite/commit/e0af898608c2f706dc2d82154c612c64e2de010c) Thanks [@louistrue](https://github.com/louistrue)! - Fix empty Description, ObjectType, and Tag columns in lists and show all IFC attributes in property panel
+
+  - Lists: add on-demand attribute extraction fallback with per-provider caching for Description, ObjectType, and Tag columns that were previously always empty
+  - Property panel: show ALL string/enum IFC attributes dynamically using the schema registry (Name, Description, ObjectType, Tag, PredefinedType, etc.) instead of hardcoding only Name/Description/ObjectType
+  - Parser: add `extractAllEntityAttributes()` for schema-aware full attribute extraction, extend `extractEntityAttributesOnDemand()` to include Tag (IfcElement index 7)
+  - Query: add `EntityNode.tag` getter and `EntityNode.allAttributes()` method for comprehensive attribute access
+  - Performance: cache `getAttributeNames()` inheritance walks, hoist module-level constants
+  - Fix type name casing bug where multi-word UPPERCASE STEP types (e.g., IFCWALLSTANDARDCASE) failed schema lookup
+
+- Updated dependencies [[`6c43c70`](https://github.com/louistrue/ifc-lite/commit/6c43c707ead13fc482ec367cb08d847b444a484a)]:
+  - @ifc-lite/data@1.7.0
+  - @ifc-lite/ifcx@1.7.0
+
+## 1.4.0
+
+### Patch Changes
+
+- 0191843: feat: Add BCF (BIM Collaboration Format) support
+
+  Adds full BCF 2.1 support for issue tracking and collaboration in BIM workflows:
+
+  **BCF Package (@ifc-lite/bcf):**
+
+  - Read/write BCF 2.1 .bcfzip files
+  - Full viewpoint support with camera position, components, and clipping planes
+  - Coordinate system conversion between Y-up (viewer) and Z-up (IFC/BCF)
+  - Support for multiple snapshot naming conventions
+  - IFC GlobalId mapping for component references
+
+  **Viewer Integration:**
+
+  - BCF panel integrated into properties panel area (resizable, same layout)
+  - Topic management with filtering and status updates
+  - Viewpoint capture with camera state, selection, and snapshot
+  - Viewpoint activation with smooth camera animation and visibility state
+  - Import/export BCF files compatible with BIMcollab and other tools
+  - Email setup nudge in empty state for easy author configuration
+  - Smart filename generation using model name for downloads
+
+  **Renderer Fixes:**
+
+  - Fix screenshot distortion caused by WebGPU texture row alignment
+  - Add GPU-synchronized screenshot capture for accurate snapshots
+
+  **Parser Fixes:**
+
+  - Extract GlobalIds for all geometry entities (not just spatial) to enable BCF component references
+
+  **Bug Fixes:**
+
+  - Fix BCF viewpoint visibility not clearing isolation mode
+  - Add localStorage error handling for private browsing mode
+  - Fix BCF XML schema compliance for BIMcollab compatibility:
+    - Correct element order (Selection before Visibility)
+    - Move ViewSetupHints to Components level (not inside Visibility)
+    - Write OriginatingSystem/AuthoringToolId as child elements (not attributes)
+    - Always include required Visibility element
+
 ## 1.3.0
 
 ### Minor Changes

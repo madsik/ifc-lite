@@ -12,7 +12,7 @@ import { IfcTypeEnum, EntityFlags, IfcTypeEnumFromString, IfcTypeEnumToString } 
 
 export interface EntityTable {
   readonly count: number;
-  
+
   expressId: Uint32Array;
   typeEnum: Uint16Array;
   globalId: Uint32Array;
@@ -20,13 +20,13 @@ export interface EntityTable {
   description: Uint32Array;
   objectType: Uint32Array;
   flags: Uint8Array;
-  
+
   containedInStorey: Int32Array;
   definedByType: Int32Array;
   geometryIndex: Int32Array;
-  
+
   typeRanges: Map<IfcTypeEnum, { start: number; end: number }>;
-  
+
   getGlobalId(expressId: number): string;
   getName(expressId: number): string;
   getDescription(expressId: number): string;
@@ -34,6 +34,12 @@ export interface EntityTable {
   getTypeName(expressId: number): string;
   hasGeometry(expressId: number): boolean;
   getByType(type: IfcTypeEnum): number[];
+
+  /** Get expressId by IFC GlobalId string (22-char GUID). Returns -1 if not found. */
+  getExpressIdByGlobalId(globalId: string): number;
+
+  /** Get all GlobalId → expressId mappings (for BCF integration) */
+  getGlobalIdMap(): Map<string, number>;
 }
 
 export class EntityTableBuilder {
@@ -108,11 +114,24 @@ export class EntityTableBuilder {
       return arr.subarray(0, this.count) as T;
     };
 
-    // Build type ranges
+    // Build type ranges (kept for cache serialization backward compat)
     const typeRanges = new Map<IfcTypeEnum, { start: number; end: number }>();
     for (const [type, start] of this.typeStarts) {
       const count = this.typeCounts.get(type)!;
       typeRanges.set(type, { start, end: start + count });
+    }
+
+    // Build correct per-type index arrays for getByType()
+    // typeRanges assumes contiguous entities per type, which fails with interleaved IFC files
+    const typeIndices = new Map<IfcTypeEnum, number[]>();
+    for (let i = 0; i < this.count; i++) {
+      const t = trim(this.typeEnum)[i] as IfcTypeEnum;
+      let arr = typeIndices.get(t);
+      if (!arr) {
+        arr = [];
+        typeIndices.set(t, arr);
+      }
+      arr.push(i);
     }
 
     const expressId = trim(this.expressId);
@@ -134,6 +153,16 @@ export class EntityTableBuilder {
     }
 
     const indexOfId = (id: number): number => idToIndex.get(id) ?? -1;
+
+    // Build GlobalId string → expressId map for BCF integration
+    // This allows O(1) lookup of expressId from IFC GlobalId (22-char string)
+    const globalIdToExpressId = new Map<string, number>();
+    for (let i = 0; i < this.count; i++) {
+      const gidString = this.strings.get(globalId[i]);
+      if (gidString) {
+        globalIdToExpressId.set(gidString, expressId[i]);
+      }
+    }
 
     return {
       count: this.count,
@@ -174,14 +203,18 @@ export class EntityTableBuilder {
         return idx >= 0 ? (flags[idx] & EntityFlags.HAS_GEOMETRY) !== 0 : false;
       },
       getByType: (type) => {
-        const range = typeRanges.get(type);
-        if (!range) return [];
-        const ids: number[] = [];
-        for (let i = range.start; i < range.end; i++) {
-          ids.push(expressId[i]);
+        const indices = typeIndices.get(type);
+        if (!indices) return [];
+        const ids: number[] = new Array(indices.length);
+        for (let i = 0; i < indices.length; i++) {
+          ids[i] = expressId[indices[i]];
         }
         return ids;
       },
+
+      getExpressIdByGlobalId: (gid) => globalIdToExpressId.get(gid) ?? -1,
+
+      getGlobalIdMap: () => new Map(globalIdToExpressId), // Defensive copy
     };
   }
 }

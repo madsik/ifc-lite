@@ -160,6 +160,7 @@ function RelationshipTypeToString(type: RelationshipType): string {
     [RelationshipType.DefinesByType]: 'IfcRelDefinesByType',
     [RelationshipType.AssociatesMaterial]: 'IfcRelAssociatesMaterial',
     [RelationshipType.AssociatesClassification]: 'IfcRelAssociatesClassification',
+    [RelationshipType.AssociatesDocument]: 'IfcRelAssociatesDocument',
     [RelationshipType.VoidsElement]: 'IfcRelVoidsElement',
     [RelationshipType.FillsElement]: 'IfcRelFillsElement',
     [RelationshipType.ConnectsPathElements]: 'IfcRelConnectsPathElements',
@@ -167,7 +168,7 @@ function RelationshipTypeToString(type: RelationshipType): string {
     [RelationshipType.SpaceBoundary]: 'IfcRelSpaceBoundary',
     [RelationshipType.AssignsToGroup]: 'IfcRelAssignsToGroup',
     [RelationshipType.AssignsToProduct]: 'IfcRelAssignsToProduct',
-    [RelationshipType.ReferencedInSpatialStructure]: 'ReferencedInSpatialStructure',
+    [RelationshipType.ReferencedInSpatialStructure]: 'IfcRelReferencedInSpatialStructure',
   };
   return names[type] || 'Unknown';
 }

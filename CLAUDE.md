@@ -4,15 +4,73 @@ This document provides instructions for AI agents working on the ifc-lite codeba
 
 ## Project Overview
 
-ifc-lite is a high-performance IFC (Industry Foundation Classes) viewer for BIM (Building Information Modeling) files. It supports both IFC4 and IFC5/IFCX formats with features including:
+ifc-lite is a high-performance IFC (Industry Foundation Classes) platform for BIM (Building Information Modeling). It supports both IFC4 and IFC5/IFCX formats with features including:
 
 - WebGPU-accelerated 3D rendering
 - Multi-model federation (loading multiple models with unified selection/visibility)
 - Property panels with IFC attributes, properties, and quantities
 - Spatial hierarchy navigation
 - Section planes and measurements
+- BCF collaboration (topics, viewpoints, comments)
+- IDS validation (Information Delivery Specification checking)
+- Configurable property lists (entity tables with column discovery)
+- 2D architectural drawings (section cuts, floor plans, elevations)
+- Property editing with undo/redo and change tracking
+- Orthographic projection with seamless perspective switching
+- Automatic floorplan views per storey (section plane + ortho top-down)
+- Pinboard (selection basket) for collecting and isolating entities
+- Tree view by IFC type grouping (alongside spatial hierarchy)
+- Lens system (rule-based 3D colorization and filtering)
 
 ## Critical Standards
+
+### IFC Schema Compliance is MANDATORY
+
+This project works with the IFC (Industry Foundation Classes) standard. **All user-facing APIs, scripting interfaces, and data exports MUST use correct IFC schema nomenclature.** Never invent simplified names or deviate from the IFC EXPRESS specification.
+
+**Entity Attributes — PascalCase per IFC EXPRESS:**
+- `GlobalId` (not `globalId`) — `IfcGloballyUniqueId`
+- `Name` (not `name`) — `IfcLabel`
+- `Description` (not `description`) — `IfcText`
+- `ObjectType` (not `objectType`) — `IfcLabel`
+- `Type` — the IFC entity type name (e.g. `IfcWall`, `IfcBuildingStorey`)
+
+Entity data in scripts exposes both PascalCase (IFC-compliant) and camelCase aliases. Both are accepted everywhere.
+
+**Relationship Entities — use full IFC names:**
+- `IfcRelContainedInSpatialStructure` (not `ContainsElements`)
+- `IfcRelAggregates` (not `Aggregates`)
+- `IfcRelDefinesByType` (not `DefinesByType`)
+- `IfcRelDefinesByProperties` (not `DefinesByProperties`)
+- `IfcRelVoidsElement` (not `VoidsElement`)
+- `IfcRelFillsElement` (not `FillsElement`)
+- `IfcRelAssociatesMaterial`, `IfcRelAssociatesClassification`, etc.
+
+**Entity Type Names — PascalCase with Ifc prefix:**
+- `IfcWall`, `IfcWallStandardCase`, `IfcBeam`, `IfcColumn`, `IfcSlab`, etc.
+- Internal storage uses UPPERCASE (`IFCWALLSTANDARDCASE`) — always convert for display
+
+**Property/Quantity Sets — use standard Pset_/Qto_ prefixes:**
+- `Pset_WallCommon`, `Pset_DoorCommon`, etc.
+- `Qto_WallBaseQuantities`, `Qto_SlabBaseQuantities`, etc.
+
+**Architecture: Internal vs. User-Facing naming:**
+- `EntityData` interface uses camelCase internally (TypeScript convention, 170+ consumers)
+- Script bridge adds PascalCase aliases to EntityData at the boundary
+- Export columns accept both `Name` and `name` (PascalCase preferred, camelCase for backward compat)
+- Relationship type strings in the SDK wire protocol use full IFC names (e.g. `IfcRelAggregates`)
+
+```typescript
+// BAD — non-compliant simplified names
+const refs = dispatch('query', 'related', [ref, 'Aggregates', 'forward']);
+entity.name  // legacy, acceptable internally
+columns: ['name', 'type', 'globalId']  // legacy
+
+// GOOD — IFC schema compliant
+const refs = dispatch('query', 'related', [ref, 'IfcRelAggregates', 'forward']);
+entity.Name  // IFC PascalCase — preferred
+columns: ['Name', 'Type', 'GlobalId']  // IFC PascalCase
+```
 
 ### Performance is NON-NEGOTIABLE
 
@@ -81,14 +139,19 @@ function isIfcxDataStore(store: unknown): store is IfcxDataStore {
 
 **File Organization:**
 - `apps/viewer/` - React frontend application
-- `packages/` - Shared libraries (parser, renderer, geometry, etc.)
+- `apps/server/` - Rust HTTP server (Axum)
+- `apps/desktop/` - Tauri desktop application
+- `packages/` - 20 TypeScript packages (parser, renderer, geometry, bcf, ids, mutations, drawing-2d, encoding, lists, etc.)
+- `rust/` - 3 Rust crates (core, geometry, wasm-bindings)
 - Tests co-located with source files (`*.test.ts`)
 
 **Key Patterns:**
-- Zustand for state management (slices pattern)
-- React hooks for business logic (`useIfc`, `useViewerSelectors`)
+- Zustand for state management (17 slices: selection, visibility, model, bcf, ids, list, mutation, drawing2D, sheet, section, measurement, camera, data, loading, hover, ui, pinboard, lens)
+- React hooks for business logic (`useIfc`, `useViewerSelectors`, `useLens`, `useFloorplanView`)
 - WebGPU for 3D rendering
 - Virtualized lists for large datasets
+- FederationRegistry singleton for multi-model ID management
+- On-demand extraction: entity attributes, properties, quantities, classifications, and materials are extracted lazily from the source buffer when accessed, not during the initial parse. Use `EntityNode` or the adapter's cached getters to avoid redundant STEP parsing.
 
 ### Multi-Model Federation
 
@@ -133,6 +196,8 @@ npx tsc -p apps/viewer/tsconfig.json --noEmit
 2. **Memo dependencies**: Adding state to dependencies can cause cascade recomputation
 3. **Array operations**: `push(...spread)` is O(n²) in a loop - preallocate instead
 4. **ID confusion**: Always be clear if working with local expressId or global ID
+5. **IFC type name casing**: Entity types from STEP are UPPERCASE (e.g., `IFCWALLSTANDARDCASE`). Use `store.entities.getTypeName(id)` for properly-cased names (`IfcWallStandardCase`). The `normalizeTypeName` helper only handles single-word types correctly.
+6. **On-demand extraction in loops**: `extractEntityAttributesOnDemand` parses the source buffer per entity. When calling in a loop (e.g., lists with 5000+ rows), always cache results to avoid redundant STEP parsing.
 
 ## Commit Guidelines
 

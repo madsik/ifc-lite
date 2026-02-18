@@ -32,6 +32,34 @@ export interface ActiveMeasurement {
   distance: number;
 }
 
+/** Orthogonal constraint axis type */
+export type OrthogonalAxis = 'axis1' | 'axis2' | 'axis3';
+
+/** Vec3 type for constraint calculations */
+export interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/** Orthogonal constraint for measurements (shift+drag) */
+export interface MeasurementConstraintEdge {
+  /** Three orthogonal axes for constraint snapping */
+  axes: {
+    axis1: Vec3;
+    axis2: Vec3;
+    axis3: Vec3;
+  };
+  /** Axis colors for visualization */
+  colors: {
+    axis1: string;
+    axis2: string;
+    axis3: string;
+  };
+  /** Currently active constraint axis (computed from cursor direction) */
+  activeAxis: OrthogonalAxis | null;
+}
+
 // ============================================================================
 // Edge Lock Types (Magnetic Snapping)
 // ============================================================================
@@ -121,6 +149,8 @@ export interface CameraRotation {
   elevation: number;
 }
 
+export type ProjectionMode = 'perspective' | 'orthographic';
+
 export interface CameraCallbacks {
   setPresetView?: (view: 'top' | 'bottom' | 'front' | 'back' | 'left' | 'right') => void;
   fitAll?: () => void;
@@ -130,6 +160,9 @@ export interface CameraCallbacks {
   frameSelection?: () => void;
   orbit?: (deltaX: number, deltaY: number) => void;
   projectToScreen?: (worldPos: { x: number; y: number; z: number }) => { x: number; y: number } | null;
+  setProjectionMode?: (mode: ProjectionMode) => void;
+  toggleProjectionMode?: () => void;
+  getProjectionMode?: () => ProjectionMode;
 }
 
 // ============================================================================

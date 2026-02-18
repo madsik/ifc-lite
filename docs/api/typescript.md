@@ -573,7 +573,70 @@ class RelationshipGraph {
 
 ## @ifc-lite/export
 
-Note: Parquet/BOS export is available from `@ifc-lite/export/parquet` to avoid bundlers pulling in optional parquet dependencies for users that only need GLB/JSON exports.
+### StepExporter
+
+Export IFC models back to STEP format with optional visible-only filtering.
+
+```typescript
+class StepExporter {
+  constructor(dataStore: IfcDataStore, source: Uint8Array);
+
+  export(options?: StepExportOptions): StepExportResult;
+}
+
+interface StepExportOptions {
+  visibleOnly?: boolean;
+  hiddenEntityIds?: Set<number>;
+  isolatedEntityIds?: Set<number> | null;
+  applyMutations?: boolean;
+  deltaOnly?: boolean;
+}
+
+interface StepExportResult {
+  content: string;
+  stats: { entityCount: number };
+}
+```
+
+### MergedExporter
+
+Merge multiple IFC models into a single STEP file with unified ID space.
+
+```typescript
+class MergedExporter {
+  export(
+    models: MergeModelInput[],
+    options?: MergeExportOptions
+  ): MergeExportResult;
+}
+
+interface MergeModelInput {
+  dataStore: IfcDataStore;
+  source: Uint8Array;
+  name?: string;
+}
+```
+
+### collectReferencedEntityIds / collectStyleEntities
+
+Low-level reference collection for building the entity closure needed for valid STEP export.
+
+```typescript
+// Forward closure walk from root entities
+function collectReferencedEntityIds(
+  store: IfcDataStore,
+  source: Uint8Array,
+  hiddenIds?: Set<number>,
+  isolatedIds?: Set<number> | null
+): Set<number>;
+
+// Reverse pass to collect IfcStyledItem entities
+function collectStyleEntities(
+  store: IfcDataStore,
+  source: Uint8Array,
+  referencedIds: Set<number>
+): Set<number>;
+```
 
 ### GltfExporter
 
@@ -669,3 +732,634 @@ interface Progress {
   stage?: string;
 }
 ```
+
+---
+
+## @ifc-lite/bcf
+
+BCF (BIM Collaboration Format) support for issue tracking in BIM projects. Implements BCF 2.1 and 3.0.
+
+### readBCF / writeBCF
+
+```typescript
+// Read a BCF/BCFzip file (accepts File, Blob, or ArrayBuffer)
+function readBCF(file: File | Blob | ArrayBuffer): Promise<BCFProject>;
+
+// Write a BCF file (returns a Blob)
+function writeBCF(project: BCFProject): Promise<Blob>;
+```
+
+### createBCFProject
+
+```typescript
+function createBCFProject(options?: {
+  name?: string;
+  version?: '2.1' | '3.0';
+}): BCFProject;
+```
+
+### createBCFTopic / createBCFComment
+
+```typescript
+function createBCFTopic(options: {
+  title: string;
+  author: string;
+  // ... additional topic fields
+}): BCFTopic;
+
+function createBCFComment(options: {
+  author: string;
+  comment: string;
+}): BCFComment;
+```
+
+### Project Mutation Helpers
+
+```typescript
+// Add topic to project
+function addTopicToProject(project: BCFProject, topic: BCFTopic): void;
+
+// Add comment to topic
+function addCommentToTopic(topic: BCFTopic, comment: BCFComment): void;
+
+// Add viewpoint to topic
+function addViewpointToTopic(topic: BCFTopic, viewpoint: BCFViewpoint): void;
+```
+
+### Viewpoints
+
+```typescript
+// Create a viewpoint from viewer state
+function createViewpoint(options: {
+  camera: ViewerCameraState;
+  sectionPlane?: ViewerSectionPlane;
+  selectedGuids?: string[];
+  hiddenGuids?: string[];
+  visibleGuids?: string[];
+  snapshot?: string;
+}): BCFViewpoint;
+
+// Extract viewer state from a BCF viewpoint
+function extractViewpointState(viewpoint: BCFViewpoint): {
+  camera?: ViewerCameraState;
+  sectionPlane?: ViewerSectionPlane;
+  selectedGuids: string[];
+  hiddenGuids: string[];
+  visibleGuids: string[];
+  coloredGuids: { color: string; guids: string[] }[];
+};
+```
+
+### GUID Utilities
+
+```typescript
+function uuidToIfcGuid(uuid: string): string;
+function ifcGuidToUuid(guid: string): string;
+function generateIfcGuid(): string;
+function isValidIfcGuid(guid: string): boolean;
+```
+
+### Types
+
+```typescript
+interface BCFProject {
+  // Project metadata and topics
+}
+
+interface BCFTopic {
+  // Topic with title, author, status, comments, viewpoints
+}
+
+interface BCFComment {
+  // Comment with author, text, and timestamp
+}
+
+interface BCFViewpoint {
+  // Viewpoint with camera position, components, and clipping planes
+}
+
+interface BCFComponents {
+  // Component visibility and selection state
+}
+
+interface BCFClippingPlane {
+  // Clipping plane definition
+}
+```
+
+---
+
+## @ifc-lite/ids
+
+IDS (Information Delivery Specification) validation. Implements IDS 1.0 with all facet and constraint types.
+
+### parseIDS
+
+```typescript
+// Parse an IDS XML file (accepts string or ArrayBuffer)
+function parseIDS(xmlContent: string | ArrayBuffer): IDSDocument;
+```
+
+### validateIDS
+
+```typescript
+// Run validation against IFC data
+function validateIDS(
+  document: IDSDocument,
+  accessor: IFCDataAccessor,
+  modelInfo: IDSModelInfo,
+  options?: ValidatorOptions
+): Promise<IDSValidationReport>;
+```
+
+### Facet Checking
+
+```typescript
+function checkFacet(facet: IDSFacet, entity: EntityRef, accessor: IFCDataAccessor): boolean;
+function filterByFacet(facet: IDSFacet, entities: EntityRef[], accessor: IFCDataAccessor): EntityRef[];
+function checkEntityFacet(facet: IDSFacet, entity: EntityRef): boolean;
+function checkPropertyFacet(facet: IDSFacet, entity: EntityRef, accessor: IFCDataAccessor): boolean;
+```
+
+### Constraint Matching
+
+```typescript
+function matchConstraint(constraint: IDSConstraint, value: unknown): boolean;
+function formatConstraint(constraint: IDSConstraint): string;
+function getConstraintMismatchReason(constraint: IDSConstraint, value: unknown): string;
+```
+
+### Translation
+
+```typescript
+function createTranslationService(locale: 'en' | 'de' | 'fr'): TranslationService;
+```
+
+### Types
+
+```typescript
+interface IDSDocument {
+  // Parsed IDS document with specifications
+}
+
+interface IDSSpecification {
+  // A single specification with applicability and requirements
+}
+
+interface IDSFacet {
+  // Facet definition (entity, property, material, etc.)
+}
+
+interface IDSConstraint {
+  // Constraint definition (exact value, pattern, range, enumeration)
+}
+
+interface IDSValidationReport {
+  // Validation results with pass/fail per specification
+}
+
+interface IDSEntityResult {
+  // Result for a single entity against a specification
+}
+
+interface IFCDataAccessor {
+  // Abstraction for accessing IFC data during validation
+}
+```
+
+---
+
+## @ifc-lite/mutations
+
+Property editing with bidirectional change tracking.
+
+### MutablePropertyView
+
+Wraps a PropertyTable with a mutation overlay for non-destructive property editing.
+
+```typescript
+class MutablePropertyView {
+  constructor(baseTable: PropertyTable | null, modelId: string);
+
+  // Get properties for an entity (with mutations applied)
+  getForEntity(entityId: number): PropertySet[];
+
+  // Get a specific property value (with mutations applied)
+  getPropertyValue(entityId: number, psetName: string, propName: string): PropertyValue | null;
+
+  // Set a property value (returns the Mutation record)
+  setProperty(
+    entityId: number,
+    psetName: string,
+    propName: string,
+    value: PropertyValue,
+    valueType?: PropertyValueType,
+    unit?: string
+  ): Mutation;
+
+  // Delete a property
+  deleteProperty(entityId: number, psetName: string, propName: string): Mutation | null;
+
+  // Create a new property set
+  createPropertySet(
+    entityId: number,
+    psetName: string,
+    properties: Array<{ name: string; value: PropertyValue; type?: PropertyValueType }>
+  ): Mutation;
+
+  // Delete a property set
+  deletePropertySet(entityId: number, psetName: string): Mutation;
+
+  // Get all recorded mutations
+  getMutations(): Mutation[];
+
+  // Check if entity has changes
+  hasChanges(entityId?: number): boolean;
+
+  // Count of modified entities
+  getModifiedEntityCount(): number;
+
+  // Apply a batch of mutations
+  applyMutations(mutations: Mutation[]): void;
+
+  // Export/import mutations as JSON
+  exportMutations(): string;
+  importMutations(json: string): void;
+
+  // Reset all mutations
+  clear(): void;
+}
+```
+
+### ChangeSetManager
+
+Manage named groups of mutations.
+
+```typescript
+class ChangeSetManager {
+  createChangeSet(name: string): ChangeSet;
+  getActiveChangeSet(): ChangeSet | null;
+  setActiveChangeSet(id: string | null): void;
+  addMutation(mutation: Mutation): void;
+  getChangeSet(id: string): ChangeSet | null;
+  getAllChangeSets(): ChangeSet[];
+  deleteChangeSet(id: string): boolean;
+  renameChangeSet(id: string, newName: string): void;
+  mergeChangeSets(ids: string[], newName: string): ChangeSet;
+  exportChangeSet(id: string): string;
+  importChangeSet(json: string): ChangeSet;
+  clear(): void;
+}
+```
+
+### BulkQueryEngine
+
+Query and update entities in bulk.
+
+```typescript
+class BulkQueryEngine {
+  constructor(
+    entities: EntityTable,
+    mutationView: MutablePropertyView,
+    spatialHierarchy?: SpatialHierarchy | null,
+    properties?: PropertyTable | null,
+    strings?: { get(idx: number): string } | null
+  );
+
+  // Select entities matching criteria
+  select(criteria: SelectionCriteria): number[];
+
+  // Preview which entities match the query
+  preview(query: BulkQuery): BulkQueryPreview;
+
+  // Execute the bulk update
+  execute(query: BulkQuery): BulkQueryResult;
+}
+```
+
+### CsvConnector
+
+Import property updates from CSV files.
+
+```typescript
+class CsvConnector {
+  constructor(
+    entities: EntityTable,
+    mutationView: MutablePropertyView,
+    strings?: { get(idx: number): string } | null
+  );
+
+  parse(content: string, options?: CsvParseOptions): CsvRow[];
+  match(rows: CsvRow[], mapping: DataMapping): MatchResult[];
+  generateMutations(matches: MatchResult[], mapping: DataMapping): Mutation[];
+  import(content: string, mapping: DataMapping, options?: CsvParseOptions): ImportStats;
+  preview(content: string, mapping: DataMapping, options?: CsvParseOptions): {
+    rows: CsvRow[]; matches: MatchResult[]; estimatedMutations: number;
+  };
+  autoDetectMappings(headers: string[]): PropertyMapping[];
+}
+```
+
+### Types
+
+```typescript
+interface Mutation {
+  id: string;
+  type: 'CREATE_PROPERTY' | 'UPDATE_PROPERTY' | 'DELETE_PROPERTY' | 'CREATE_PROPERTY_SET' | 'DELETE_PROPERTY_SET';
+  timestamp: number;
+  modelId: string;
+  entityId: number;
+  psetName?: string;
+  propName?: string;
+  oldValue?: PropertyValue;
+  newValue?: PropertyValue;
+}
+
+interface ChangeSet {
+  id: string;
+  name: string;
+  createdAt: number;
+  mutations: Mutation[];
+  applied: boolean;
+}
+
+type PropertyValue = string | number | boolean | null | PropertyValue[];
+
+interface SelectionCriteria {
+  entityTypes?: number[];
+  storeys?: number[];
+  propertyFilters?: PropertyFilter[];
+  globalIds?: string[];
+  expressIds?: number[];
+  namePattern?: string;
+}
+
+interface BulkQuery {
+  select: SelectionCriteria;
+  action: BulkAction;
+}
+
+interface BulkQueryPreview {
+  matchedEntityIds: number[];
+  matchedCount: number;
+  estimatedMutations: number;
+}
+
+interface BulkQueryResult {
+  mutations: Mutation[];
+  affectedEntityCount: number;
+  success: boolean;
+  errors?: string[];
+}
+
+interface CsvRow {
+  [column: string]: string;
+}
+
+type MatchStrategy =
+  | { type: 'globalId'; column: string }
+  | { type: 'expressId'; column: string }
+  | { type: 'name'; column: string };
+
+interface DataMapping {
+  matchStrategy: MatchStrategy;
+  propertyMappings: PropertyMapping[];
+}
+
+interface ImportStats {
+  totalRows: number;
+  matchedRows: number;
+  unmatchedRows: number;
+  mutationsCreated: number;
+  errors: string[];
+  warnings: string[];
+}
+```
+
+---
+
+## @ifc-lite/drawing-2d
+
+2D architectural drawing generation from 3D IFC models.
+
+### Drawing2DGenerator
+
+```typescript
+class Drawing2DGenerator {
+  constructor(options?: DrawingGeneratorOptions);
+
+  // Generate a floor plan
+  generateFloorPlan(meshData: MeshData[], options?: FloorPlanOptions): Drawing2D;
+
+  // Generate a section view
+  generateSection(meshData: MeshData[], config: SectionConfig): Drawing2D;
+}
+```
+
+### High-Level Functions
+
+```typescript
+function generateFloorPlan(
+  meshes: MeshData[],
+  elevation: number,
+  options?: Partial<GeneratorOptions>
+): Promise<Drawing2D>;
+
+function generateSection(
+  meshes: MeshData[],
+  axis: 'x' | 'z',
+  position: number,
+  options?: Partial<GeneratorOptions>
+): Promise<Drawing2D>;
+
+function createSectionConfig(
+  axis: 'x' | 'y' | 'z',
+  position: number,
+  options?: Partial<Omit<SectionConfig, 'plane'>>
+): SectionConfig;
+```
+
+### Section Cutting
+
+```typescript
+class SectionCutter {
+  cut(meshes: MeshData[], plane: Plane): DrawingLine[];
+}
+
+function cutMeshesStreaming(
+  meshes: AsyncIterable<MeshData>,
+  plane: Plane
+): AsyncGenerator<DrawingLine[]>;
+```
+
+### SVG Export
+
+```typescript
+class SVGExporter {
+  export(drawing: Drawing2D, options?: SVGExportOptions): string;
+}
+
+function exportToSVG(drawing: Drawing2D, options?: SVGExportOptions): string;
+```
+
+### Polygon Building
+
+```typescript
+class PolygonBuilder {
+  build(lines: DrawingLine[]): Polygon[];
+}
+
+function simplifyPolygon(polygon: Polygon, tolerance?: number): Polygon;
+```
+
+### Edge Extraction
+
+```typescript
+class EdgeExtractor {
+  extract(meshes: MeshData[], viewDir: Vector3): DrawingLine[];
+}
+
+function getViewDirection(preset: ViewPreset): Vector3;
+```
+
+### Hidden Line Removal
+
+```typescript
+class HiddenLineClassifier {
+  classify(lines: DrawingLine[], meshes: MeshData[]): ClassifiedLine[];
+}
+```
+
+### Hatching
+
+```typescript
+class HatchGenerator {
+  generate(polygon: Polygon, pattern: HatchPattern): DrawingLine[];
+}
+
+const HATCH_PATTERNS: Record<string, HatchPattern>;
+function getHatchPattern(materialName: string): HatchPattern;
+```
+
+### Styles and Constants
+
+```typescript
+const LINE_STYLES: Record<string, LineStyle>;
+const COMMON_SCALES: Record<string, number>;
+const PAPER_SIZES: Record<string, { width: number; height: number }>;
+```
+
+### Symbols
+
+```typescript
+function generateDoorSymbol(width: number, swing: number): DrawingLine[];
+function generateWindowSymbol(width: number): DrawingLine[];
+function generateStairArrow(start: Vector3, end: Vector3): DrawingLine[];
+```
+
+### GPU Acceleration
+
+```typescript
+class GPUSectionCutter {
+  constructor(device: GPUDevice);
+  cut(meshes: MeshData[], plane: Plane): Promise<DrawingLine[]>;
+}
+
+function isGPUComputeAvailable(): Promise<boolean>;
+```
+
+### Graphic Overrides
+
+```typescript
+class GraphicOverrideEngine {
+  addRule(rule: GraphicOverrideRule): void;
+  apply(drawing: Drawing2D): Drawing2D;
+}
+
+function createOverrideEngine(preset?: GraphicOverridePreset): GraphicOverrideEngine;
+
+// Built-in presets
+const ARCHITECTURAL_PRESET: GraphicOverridePreset;
+const FIRE_SAFETY_PRESET: GraphicOverridePreset;
+```
+
+### Drawing Sheets
+
+```typescript
+function createFrame(options: FrameOptions): DrawingFrame;
+function createTitleBlock(options: TitleBlockOptions): TitleBlock;
+function renderFrame(frame: DrawingFrame): SVGElement;
+function renderTitleBlock(block: TitleBlock): SVGElement;
+function renderScaleBar(scale: number, options?: ScaleBarOptions): SVGElement;
+
+const PAPER_SIZE_REGISTRY: Record<string, PaperSize>;
+```
+
+### Types
+
+```typescript
+interface Drawing2D {
+  // Collection of drawing lines, polygons, and metadata
+}
+
+interface SectionConfig {
+  // Section plane position, direction, and depth
+}
+
+interface DrawingLine {
+  // Line segment with start, end, style, and layer
+}
+
+interface SVGExportOptions {
+  // SVG output settings (scale, stroke widths, colors)
+}
+
+interface GraphicOverrideRule {
+  // Rule matching entities to graphic styles
+}
+
+interface GraphicOverridePreset {
+  // Named collection of override rules
+}
+
+interface DrawingSheet {
+  // Sheet layout with frame, title block, and viewports
+}
+```
+
+---
+
+## @ifc-lite/codegen
+
+Code generation from IFC EXPRESS schemas.
+
+### Overview
+
+Generates TypeScript entity types from EXPRESS schema files. Used to produce the 876+ IFC4X3 entity definitions used by the parser. This is primarily a build-time tool, not used at runtime.
+
+```typescript
+// Build-time usage (typically invoked via package scripts)
+// Reads EXPRESS schema (.exp) files and outputs TypeScript type definitions
+// for all IFC entity types, enumerations, and select types.
+```
+
+---
+
+## @ifc-lite/server-bin
+
+Pre-built server binary distribution package.
+
+### Overview
+
+Distributes pre-compiled `ifc-lite-server` binaries for deployment without requiring a Rust toolchain.
+
+**Supported platforms:**
+
+| Platform         | Architecture |
+|------------------|-------------|
+| `linux-x64`      | x86_64      |
+| `linux-arm64`    | aarch64     |
+| `linux-x64-musl` | x86_64 (musl libc) |
+| `darwin-x64`     | x86_64 (macOS) |
+| `darwin-arm64`   | aarch64 (macOS Apple Silicon) |
+| `win32-x64`      | x86_64 (Windows) |

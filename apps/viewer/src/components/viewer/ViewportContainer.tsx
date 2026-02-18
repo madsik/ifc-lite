@@ -6,11 +6,20 @@ import { useMemo, useRef, useState, useCallback } from 'react';
 import { Viewport } from './Viewport';
 import { ViewportOverlays } from './ViewportOverlays';
 import { ToolOverlays } from './ToolOverlays';
+import { Section2DPanel } from './Section2DPanel';
 import { useViewerStore } from '@/store';
 import { useIfc } from '@/hooks/useIfc';
 import { useWebGPU } from '@/hooks/useWebGPU';
 import { Upload, MousePointer, Layers, Info, Command, AlertTriangle, ChevronDown, ExternalLink, Plus } from 'lucide-react';
-import type { MeshData, CoordinateInfo } from '@ifc-lite/geometry';
+import type { MeshData, CoordinateInfo, GeometryResult } from '@ifc-lite/geometry';
+
+const ZERO_VEC3 = { x: 0, y: 0, z: 0 };
+const DEFAULT_COORDINATE_INFO: CoordinateInfo = {
+  originShift: ZERO_VEC3,
+  originalBounds: { min: ZERO_VEC3, max: ZERO_VEC3 },
+  shiftedBounds: { min: ZERO_VEC3, max: ZERO_VEC3 },
+  hasLargeCoordinates: false,
+};
 
 export function ViewportContainer() {
   const { geometryResult, ifcDataStore, loadFile, loading, models, clearAllModels, loadFilesSequentially } = useIfc();
@@ -73,8 +82,8 @@ export function ViewportContainer() {
         meshes: allMeshes,
         totalVertices,
         totalTriangles,
-        coordinateInfo: mergedCoordinateInfo,
-      };
+        coordinateInfo: mergedCoordinateInfo ?? DEFAULT_COORDINATE_INFO,
+      } satisfies GeometryResult;
     }
 
     // Legacy mode (no federation): use original geometryResult
@@ -106,24 +115,24 @@ export function ViewportContainer() {
       return;
     }
 
-    // Filter to only IFC files
-    const ifcFiles = Array.from(e.dataTransfer.files).filter(
-      f => f.name.endsWith('.ifc') || f.name.endsWith('.ifcx')
+    // Filter to supported files (IFC, IFCX, GLB)
+    const supportedFiles = Array.from(e.dataTransfer.files).filter(
+      f => f.name.endsWith('.ifc') || f.name.endsWith('.ifcx') || f.name.endsWith('.glb')
     );
 
-    if (ifcFiles.length === 0) return;
+    if (supportedFiles.length === 0) return;
 
     if (hasModelsLoaded) {
       // Models already loaded - add new files sequentially
-      loadFilesSequentially(ifcFiles);
-    } else if (ifcFiles.length === 1) {
+      loadFilesSequentially(supportedFiles);
+    } else if (supportedFiles.length === 1) {
       // Single file, no models loaded - use loadFile
-      loadFile(ifcFiles[0]);
+      loadFile(supportedFiles[0]);
     } else {
       // Multiple files, no models loaded - use federation
       resetViewerState();
       clearAllModels();
-      loadFilesSequentially(ifcFiles);
+      loadFilesSequentially(supportedFiles);
     }
   }, [loadFile, loadFilesSequentially, resetViewerState, clearAllModels, webgpu.supported, hasModelsLoaded]);
 
@@ -136,22 +145,22 @@ export function ViewportContainer() {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    // Filter to only IFC files
-    const ifcFiles = Array.from(files).filter(
-      f => f.name.endsWith('.ifc') || f.name.endsWith('.ifcx')
+    // Filter to supported files (IFC, IFCX, GLB)
+    const supportedFiles = Array.from(files).filter(
+      f => f.name.endsWith('.ifc') || f.name.endsWith('.ifcx') || f.name.endsWith('.glb')
     );
 
-    if (ifcFiles.length === 0) return;
+    if (supportedFiles.length === 0) return;
 
-    if (ifcFiles.length === 1) {
+    if (supportedFiles.length === 1) {
       // Single file - use loadFile (simpler single-model path)
-      loadFile(ifcFiles[0]);
+      loadFile(supportedFiles[0]);
     } else {
       // Multiple files selected - use federation from the start
       // Clear everything and start fresh, then load sequentially
       resetViewerState();
       clearAllModels();
-      loadFilesSequentially(ifcFiles);
+      loadFilesSequentially(supportedFiles);
     }
 
     // Reset input so same file can be selected again
@@ -308,6 +317,7 @@ export function ViewportContainer() {
     return (
       <div
         className="relative h-full w-full bg-white dark:bg-black text-zinc-900 dark:text-zinc-50 overflow-hidden"
+        data-viewport
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -317,7 +327,7 @@ export function ViewportContainer() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".ifc,.ifcx"
+          accept=".ifc,.ifcx,.glb"
           multiple
           onChange={handleFileSelect}
           className="hidden"
@@ -547,6 +557,7 @@ export function ViewportContainer() {
   return (
     <div
       className="relative h-full w-full bg-zinc-50 dark:bg-black overflow-hidden"
+      data-viewport
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -574,6 +585,11 @@ export function ViewportContainer() {
       />
       <ViewportOverlays />
       <ToolOverlays />
+      <Section2DPanel 
+        mergedGeometry={mergedGeometryResult}
+        computedIsolatedIds={computedIsolatedIds}
+        modelIdToIndex={modelIdToIndex}
+      />
     </div>
   );
 }

@@ -23,6 +23,14 @@ import { createMeasurementSlice, type MeasurementSlice } from './slices/measurem
 import { createDataSlice, type DataSlice } from './slices/dataSlice.js';
 import { createModelSlice, type ModelSlice } from './slices/modelSlice.js';
 import { createMutationSlice, type MutationSlice } from './slices/mutationSlice.js';
+import { createDrawing2DSlice, type Drawing2DSlice } from './slices/drawing2DSlice.js';
+import { createSheetSlice, type SheetSlice } from './slices/sheetSlice.js';
+import { createBcfSlice, type BCFSlice } from './slices/bcfSlice.js';
+import { createIdsSlice, type IDSSlice } from './slices/idsSlice.js';
+import { createListSlice, type ListSlice } from './slices/listSlice.js';
+import { createPinboardSlice, type PinboardSlice } from './slices/pinboardSlice.js';
+import { createLensSlice, type LensSlice } from './slices/lensSlice.js';
+import { createScriptSlice, type ScriptSlice } from './slices/scriptSlice.js';
 
 // Import constants for reset function
 import { CAMERA_DEFAULTS, SECTION_PLANE_DEFAULTS, UI_DEFAULTS, TYPE_VISIBILITY_DEFAULTS } from './constants.js';
@@ -31,10 +39,37 @@ import { CAMERA_DEFAULTS, SECTION_PLANE_DEFAULTS, UI_DEFAULTS, TYPE_VISIBILITY_D
 export type * from './types.js';
 
 // Explicitly re-export multi-model types that need to be imported by name
-export type { EntityRef, SchemaVersion, FederatedModel } from './types.js';
+export type { EntityRef, SchemaVersion, FederatedModel, MeasurementConstraintEdge, OrthogonalAxis } from './types.js';
 
 // Re-export utility functions for entity references
 export { entityRefToString, stringToEntityRef, entityRefEquals, isIfcxDataStore } from './types.js';
+
+// Re-export single source of truth for globalId → EntityRef resolution
+export { resolveEntityRef } from './resolveEntityRef.js';
+
+// Re-export Drawing2D types
+export type { Drawing2DState, Drawing2DStatus, Annotation2DTool, PolygonArea2DResult, TextAnnotation2D, CloudAnnotation2D, SelectedAnnotation2D } from './slices/drawing2DSlice.js';
+
+// Re-export Sheet types
+export type { SheetState } from './slices/sheetSlice.js';
+
+// Re-export BCF types
+export type { BCFSlice, BCFSliceState } from './slices/bcfSlice.js';
+
+// Re-export IDS types
+export type { IDSSlice, IDSSliceState, IDSDisplayOptions, IDSFilterMode } from './slices/idsSlice.js';
+
+// Re-export List types
+export type { ListSlice } from './slices/listSlice.js';
+
+// Re-export Pinboard types
+export type { PinboardSlice } from './slices/pinboardSlice.js';
+
+// Re-export Lens types
+export type { LensSlice, Lens, LensRule, LensCriteria } from './slices/lensSlice.js';
+
+// Re-export Script types
+export type { ScriptSlice } from './slices/scriptSlice.js';
 
 // Combined store type
 export type ViewerState = LoadingSlice &
@@ -47,7 +82,15 @@ export type ViewerState = LoadingSlice &
   MeasurementSlice &
   DataSlice &
   ModelSlice &
-  MutationSlice & {
+  MutationSlice &
+  Drawing2DSlice &
+  SheetSlice &
+  BCFSlice &
+  IDSSlice &
+  ListSlice &
+  PinboardSlice &
+  LensSlice &
+  ScriptSlice & {
     resetViewerState: () => void;
   };
 
@@ -67,6 +110,14 @@ export const useViewerStore = create<ViewerState>()((...args) => ({
   ...createDataSlice(...args),
   ...createModelSlice(...args),
   ...createMutationSlice(...args),
+  ...createDrawing2DSlice(...args),
+  ...createSheetSlice(...args),
+  ...createBcfSlice(...args),
+  ...createIdsSlice(...args),
+  ...createListSlice(...args),
+  ...createPinboardSlice(...args),
+  ...createLensSlice(...args),
+  ...createScriptSlice(...args),
 
   // Reset all viewer state when loading new file
   // Note: Does NOT clear models - use clearAllModels() for that
@@ -134,9 +185,97 @@ export const useViewerStore = create<ViewerState>()((...args) => ({
         azimuth: CAMERA_DEFAULTS.AZIMUTH,
         elevation: CAMERA_DEFAULTS.ELEVATION,
       },
+      projectionMode: 'perspective' as const,
 
       // UI
       activeTool: UI_DEFAULTS.ACTIVE_TOOL,
+
+      // Drawing 2D
+      drawing2D: null,
+      drawing2DStatus: 'idle' as const,
+      drawing2DProgress: 0,
+      drawing2DPhase: '',
+      drawing2DError: null,
+      drawing2DPanelVisible: false,
+      drawing2DSvgContent: null,
+      drawing2DDisplayOptions: {
+        showHiddenLines: true,
+        showHatching: true,
+        showAnnotations: true,
+        show3DOverlay: true,
+        scale: 100,
+        useSymbolicRepresentations: false,
+      },
+      // Graphic overrides (keep presets, reset active and custom)
+      activePresetId: 'preset-3d-colors',
+      customOverrideRules: [],
+      overridesEnabled: true,
+      overridesPanelVisible: false,
+      // 2D Measure
+      measure2DMode: false,
+      measure2DStart: null,
+      measure2DCurrent: null,
+      measure2DShiftLocked: false,
+      measure2DLockedAxis: null,
+      measure2DResults: [],
+      measure2DSnapPoint: null,
+      // Annotation tools
+      annotation2DActiveTool: 'none' as const,
+      annotation2DCursorPos: null,
+      polygonArea2DPoints: [],
+      polygonArea2DResults: [],
+      textAnnotations2D: [],
+      textAnnotation2DEditing: null,
+      cloudAnnotation2DPoints: [],
+      cloudAnnotations2D: [],
+      selectedAnnotation2D: null,
+      // Drawing Sheet
+      activeSheet: null,
+      sheetEnabled: false,
+      sheetPanelVisible: false,
+      titleBlockEditorVisible: false,
+      // Keep savedSheetTemplates - don't reset user's templates
+
+      // BCF - reset panel but keep project and author
+      bcfPanelVisible: false,
+      bcfLoading: false,
+      bcfError: null,
+      activeTopicId: null,
+      activeViewpointId: null,
+      // Keep bcfProject and bcfAuthor - user's work
+
+      // IDS - reset panel but keep document and results
+      idsPanelVisible: false,
+      idsLoading: false,
+      idsProgress: null,
+      idsError: null,
+      idsActiveSpecificationId: null,
+      idsActiveEntityId: null,
+      // Keep idsDocument, idsValidationReport, idsLocale - user's work
+
+      // Lists - reset result but keep definitions (user's saved lists)
+      listPanelVisible: false,
+      activeListId: null,
+      listResult: null,
+      listExecuting: false,
+
+      // Pinboard - clear pinned entities on new file
+      pinboardEntities: new Set<string>(),
+
+      // Script - reset execution state but keep saved scripts and editor content
+      scriptPanelVisible: false,
+      scriptExecutionState: 'idle' as const,
+      scriptLastResult: null,
+      scriptLastError: null,
+      scriptDeleteConfirmId: null,
+
+      // Lens - deactivate but keep saved lenses
+      activeLensId: null,
+      lensPanelVisible: false,
+      lensColorMap: new Map<number, string>(),
+      lensHiddenIds: new Set<number>(),
+      lensRuleCounts: new Map<string, number>(),
+      lensRuleEntityIds: new Map<string, number[]>(),
     });
   },
 }));

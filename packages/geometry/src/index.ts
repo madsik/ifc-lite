@@ -7,14 +7,10 @@
  * Now powered by IFC-Lite native Rust WASM (1.9x faster than web-ifc)
  */
 
-// Build marker for debugging module resolution/caching.
-// NOTE: keep this as a stable exported string so app code can verify which build is bundled.
-export const __IFC_LITE_GEOMETRY_BUILD_ID = 'rtc-federation-build-2026-02-09a';
-
 // IFC-Lite components (recommended - faster)
-export { IfcLiteBridge } from './ifc-lite-bridge.js';
-export { IfcLiteMeshCollector, type StreamingColorUpdateEvent } from './ifc-lite-mesh-collector.js';
-import type { StreamingColorUpdateEvent } from './ifc-lite-mesh-collector.js';
+export { IfcLiteBridge, type SymbolicRepresentationCollection, type SymbolicPolyline, type SymbolicCircle } from './ifc-lite-bridge.js';
+export { IfcLiteMeshCollector, type StreamingColorUpdateEvent, type StreamingRtcOffsetEvent } from './ifc-lite-mesh-collector.js';
+import type { StreamingColorUpdateEvent, StreamingRtcOffsetEvent } from './ifc-lite-mesh-collector.js';
 
 // Platform bridge abstraction (auto-selects WASM or native based on environment)
 export {
@@ -35,16 +31,7 @@ export { BufferBuilder } from './buffer-builder.js';
 export { CoordinateHandler } from './coordinate-handler.js';
 export { GeometryQuality } from './progressive-loader.js';
 
-export { DetailSelector, type LODConfig, type DetailMesh } from './lod.js';
-export { computeRtcOffsetIfc, RTC_MAX_REASONABLE, RTC_TRIGGER_THRESHOLD } from './rtc.js';
-export {
-  extractCandidates,
-  scoreCandidates,
-  type SemanticCandidate,
-  type RankedCandidate,
-  type FederationHint,
-  type IfcModelLike,
-} from './semantic-alignment/candidates.js';
+export { LODGenerator, type LODConfig, type LODMesh } from './lod.js';
 export {
   deduplicateMeshes,
   getDeduplicationStats,
@@ -76,7 +63,7 @@ import { BufferBuilder } from './buffer-builder.js';
 import { CoordinateHandler } from './coordinate-handler.js';
 import { GeometryQuality } from './progressive-loader.js';
 import { createPlatformBridge, isTauri, type IPlatformBridge } from './platform-bridge.js';
-import type { GeometryResult, MeshData } from './types.js';
+import type { GeometryResult, MeshData, CoordinateInfo } from './types.js';
 
 export interface GeometryProcessorOptions {
   quality?: GeometryQuality; // Default: Balanced
@@ -115,16 +102,10 @@ export function calculateDynamicBatchSize(
 export type StreamingGeometryEvent =
   | { type: 'start'; totalEstimate: number }
   | { type: 'model-open'; modelID: number }
-  | {
-      type: 'batch';
-      meshes: MeshData[];
-      totalSoFar: number;
-      coordinateInfo?: import('./types.js').CoordinateInfo;
-      rtcInfo?: import('./types.js').RtcFrameInfo;
-      zeroCopyBatch?: import('./zero-copy-collector.js').ZeroCopyBatch;
-    }
+  | { type: 'batch'; meshes: MeshData[]; totalSoFar: number; coordinateInfo?: import('./types.js').CoordinateInfo }
   | { type: 'colorUpdate'; updates: Map<number, [number, number, number, number]> }
-  | { type: 'complete'; totalMeshes: number; coordinateInfo: import('./types.js').CoordinateInfo; rtcInfo?: import('./types.js').RtcFrameInfo };
+  | { type: 'rtcOffset'; rtcOffset: { x: number; y: number; z: number }; hasRtc: boolean }
+  | { type: 'complete'; totalMeshes: number; coordinateInfo: import('./types.js').CoordinateInfo };
 
 export type StreamingInstancedGeometryEvent =
   | { type: 'start'; totalEstimate: number }
@@ -194,7 +175,25 @@ export class GeometryProcessor {
       if (!this.bridge?.isInitialized()) {
         await this.init();
       }
-      meshes = await this.collectMeshesMainThread(buffer);
+      const mainThreadResult = await this.collectMeshesMainThread(buffer);
+      meshes = mainThreadResult.meshes;
+      // Merge building rotation from WASM into coordinate info
+      const coordinateInfoFromHandler = this.coordinateHandler.processMeshes(meshes);
+      const buildingRotation = mainThreadResult.buildingRotation;
+      const coordinateInfo: CoordinateInfo = {
+        ...coordinateInfoFromHandler,
+        buildingRotation,
+      };
+      // Build GPU-ready buffers
+      const bufferResult = this.bufferBuilder.processMeshes(meshes);
+
+      // Combine results
+      return {
+        meshes: bufferResult.meshes,
+        totalTriangles: bufferResult.totalTriangles,
+        totalVertices: bufferResult.totalVertices,
+        coordinateInfo,
+      };
     }
 
     // Handle large coordinates by shifting to origin
@@ -217,7 +216,7 @@ export class GeometryProcessor {
   /**
    * Collect meshes on main thread using IFC-Lite WASM
    */
-  private async collectMeshesMainThread(buffer: Uint8Array, _entityIndex?: Map<number, any>): Promise<MeshData[]> {
+  private async collectMeshesMainThread(buffer: Uint8Array, _entityIndex?: Map<number, any>): Promise<{ meshes: MeshData[]; buildingRotation?: number }> {
     if (!this.bridge) {
       throw new Error('WASM bridge not initialized');
     }
@@ -228,8 +227,9 @@ export class GeometryProcessor {
 
     const collector = new IfcLiteMeshCollector(this.bridge.getApi(), content);
     const meshes = collector.collectMeshes();
+    const buildingRotation = collector.getBuildingRotation();
 
-    return meshes;
+    return { meshes, buildingRotation };
   }
 
   /**
@@ -292,19 +292,17 @@ export class GeometryProcessor {
 
       const collector = new IfcLiteMeshCollector(this.bridge.getApi(), content);
       let totalMeshes = 0;
+      let extractedBuildingRotation: number | undefined = undefined;
 
-      // Determine WASM batch size based on file size.
-      // Keep first-visible latency low by preferring smaller batches.
+      // Determine optimal WASM batch size based on file size
+      // Larger batches = fewer callbacks = faster processing
       const fileSizeMB = typeof batchConfig !== 'number' && batchConfig.fileSizeMB
         ? batchConfig.fileSizeMB
         : buffer.length / (1024 * 1024);
 
-      // Lower batch sizes improve time-to-first-triangles significantly on medium files.
-      // Throughput remains acceptable with renderer-side append-only batching.
-      const wasmBatchSize =
-        fileSizeMB < 10 ? 40 :
-        fileSizeMB < 50 ? 80 :
-        fileSizeMB < 100 ? 120 : 160;
+      // Use WASM batches directly - no JS accumulation layer
+      // WASM already prioritizes simple geometry (walls, slabs) for fast first frame
+      const wasmBatchSize = fileSizeMB < 10 ? 100 : fileSizeMB < 50 ? 200 : fileSizeMB < 100 ? 300 : 500;
 
       // Use WASM batches directly for maximum throughput
       for await (const item of collector.collectMeshesStreaming(wasmBatchSize)) {
@@ -314,70 +312,37 @@ export class GeometryProcessor {
           continue;
         }
 
+        // Handle RTC offset events
+        if (item && typeof item === 'object' && 'type' in item && (item as StreamingRtcOffsetEvent).type === 'rtcOffset') {
+          const rtcEvent = item as StreamingRtcOffsetEvent;
+          yield { type: 'rtcOffset', rtcOffset: rtcEvent.rtcOffset, hasRtc: rtcEvent.hasRtc };
+          continue;
+        }
+
         // Handle mesh batches
         const batch = item as MeshData[];
         // Process coordinate shifts incrementally (will accumulate bounds)
         this.coordinateHandler.processMeshesIncremental(batch);
         totalMeshes += batch.length;
         const coordinateInfo = this.coordinateHandler.getCurrentCoordinateInfo();
-        const rtcInfo = collector.getLastRtcFrameInfo ? collector.getLastRtcFrameInfo() : null;
-        yield { type: 'batch', meshes: batch, totalSoFar: totalMeshes, coordinateInfo: coordinateInfo || undefined, rtcInfo: rtcInfo || undefined };
+
+        // Merge buildingRotation if we have it
+        const coordinateInfoWithRotation = coordinateInfo && extractedBuildingRotation !== undefined
+          ? { ...coordinateInfo, buildingRotation: extractedBuildingRotation }
+          : coordinateInfo;
+
+        yield { type: 'batch', meshes: batch, totalSoFar: totalMeshes, coordinateInfo: coordinateInfoWithRotation || undefined };
       }
 
+      // Get building rotation after streaming completes
+      extractedBuildingRotation = collector.getBuildingRotation();
+
       const coordinateInfo = this.coordinateHandler.getFinalCoordinateInfo();
-      const rtcInfo = collector.getLastRtcFrameInfo ? collector.getLastRtcFrameInfo() : null;
-      yield { type: 'complete', totalMeshes, coordinateInfo, rtcInfo: rtcInfo || undefined };
+      const finalCoordinateInfo = extractedBuildingRotation !== undefined
+        ? { ...coordinateInfo, buildingRotation: extractedBuildingRotation }
+        : coordinateInfo;
+      yield { type: 'complete', totalMeshes, coordinateInfo: finalCoordinateInfo };
     }
-  }
-
-  /**
-   * Zero-copy streaming path (WASM only): emits GPU-ready batches with views into WASM memory.
-   * Caller must upload immediately and call batch.free().
-   */
-  async *processZeroCopyStreaming(
-    buffer: Uint8Array,
-    batchConfig: number | DynamicBatchConfig = 25
-  ): AsyncGenerator<StreamingGeometryEvent> {
-    if (this.isNative) {
-      throw new Error('Zero-copy streaming currently supports WASM path only');
-    }
-    if (!this.bridge?.isInitialized()) {
-      await this.init();
-    }
-
-    this.coordinateHandler.reset();
-    yield { type: 'start', totalEstimate: buffer.length / 1000 };
-    await new Promise(resolve => setTimeout(resolve, 0));
-
-    const decoder = new TextDecoder();
-    const content = decoder.decode(buffer);
-    yield { type: 'model-open', modelID: 0 };
-
-    const { ZeroCopyMeshCollector } = await import('./zero-copy-collector.js');
-    const collector = new ZeroCopyMeshCollector(this.bridge!.getApi(), content);
-    let totalMeshes = 0;
-
-    const fileSizeMB = typeof batchConfig !== 'number' && batchConfig.fileSizeMB
-      ? batchConfig.fileSizeMB
-      : buffer.length / (1024 * 1024);
-
-    const wasmBatchSize =
-      fileSizeMB < 10 ? 40 :
-      fileSizeMB < 50 ? 80 :
-      fileSizeMB < 100 ? 120 : 160;
-
-    for await (const batch of collector.streamBatches(wasmBatchSize)) {
-      totalMeshes += batch.stats.meshCount;
-      yield {
-        type: 'batch',
-        meshes: [],
-        totalSoFar: totalMeshes,
-        zeroCopyBatch: batch,
-      };
-    }
-
-    const coordinateInfo = this.coordinateHandler.getFinalCoordinateInfo();
-    yield { type: 'complete', totalMeshes, coordinateInfo };
   }
 
   /**
@@ -555,6 +520,21 @@ export class GeometryProcessor {
       return null;
     }
     return this.bridge.getApi();
+  }
+
+  /**
+   * Parse symbolic representations (Plan, Annotation, FootPrint) from IFC content
+   * These are pre-authored 2D curves for architectural drawings (door swings, window cuts, etc.)
+   * @param buffer IFC file buffer
+   * @returns Collection of symbolic polylines and circles
+   */
+  parseSymbolicRepresentations(buffer: Uint8Array): import('@ifc-lite/wasm').SymbolicRepresentationCollection | null {
+    if (!this.bridge || !this.bridge.isInitialized()) {
+      return null;
+    }
+    const decoder = new TextDecoder();
+    const content = decoder.decode(buffer);
+    return this.bridge.parseSymbolicRepresentations(content);
   }
 
   /**

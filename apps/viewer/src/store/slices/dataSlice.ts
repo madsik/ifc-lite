@@ -33,6 +33,10 @@ export interface DataSlice {
   setGeometryResult: (result: GeometryResult | null) => void;
   appendGeometryBatch: (meshes: GeometryResult['meshes'], coordinateInfo?: CoordinateInfo) => void;
   updateMeshColors: (updates: Map<number, [number, number, number, number]>) => void;
+  /** Set pending color updates for the renderer without cloning mesh data.
+   *  Use this for transient overlays (lens, IDS) where the source-of-truth
+   *  mesh colors should remain unchanged. */
+  setPendingColorUpdates: (updates: Map<number, [number, number, number, number]>) => void;
   clearPendingColorUpdates: () => void;
   updateCoordinateInfo: (coordinateInfo: CoordinateInfo) => void;
 
@@ -101,9 +105,16 @@ export const createDataSlice: StateCreator<DataSlice, [], [], DataSlice> = (set)
   }),
 
   updateMeshColors: (updates) => set((state) => {
-    if (!state.geometryResult) return {};
     // Clone the Map to prevent external mutation of pendingColorUpdates
     const clonedUpdates = new Map(updates);
+
+    if (!state.geometryResult) {
+      // Federation mode: no local geometryResult (geometry lives in models Map).
+      // Still set pendingColorUpdates so useGeometryStreaming applies to the WebGPU scene.
+      return { pendingColorUpdates: clonedUpdates };
+    }
+
+    // Legacy/single mode: update both the data model and pending color updates
     const updatedMeshes = state.geometryResult.meshes.map(mesh => {
       const newColor = clonedUpdates.get(mesh.expressId);
       if (newColor) {
@@ -119,6 +130,8 @@ export const createDataSlice: StateCreator<DataSlice, [], [], DataSlice> = (set)
       pendingColorUpdates: clonedUpdates,
     };
   }),
+
+  setPendingColorUpdates: (updates) => set({ pendingColorUpdates: new Map(updates) }),
 
   clearPendingColorUpdates: () => set({ pendingColorUpdates: null }),
 

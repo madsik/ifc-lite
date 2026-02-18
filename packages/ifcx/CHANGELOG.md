@@ -1,5 +1,32 @@
 # @ifc-lite/ifcx
 
+## 1.8.0
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @ifc-lite/data@1.8.0
+  - @ifc-lite/mutations@1.8.0
+
+## 1.7.0
+
+### Patch Changes
+
+- Updated dependencies [[`6c43c70`](https://github.com/louistrue/ifc-lite/commit/6c43c707ead13fc482ec367cb08d847b444a484a)]:
+  - @ifc-lite/data@1.7.0
+  - @ifc-lite/mutations@1.7.0
+
+## 1.6.0
+
+### Minor Changes
+
+- [#163](https://github.com/louistrue/ifc-lite/pull/163) [`95a96cb`](https://github.com/louistrue/ifc-lite/commit/95a96cb41b79253697a20380dbbae1450ee4c55a) Thanks [@github-actions](https://github.com/apps/github-actions)! - Add GLB file import support for fast geometry loading and 3D tool interoperability
+
+  - Add GLB parser (parseGLB, loadGLBToMeshData) to cache package for importing pre-cached geometry
+  - Enable round-trip workflows: IFC → GLB (export) → MeshData (import)
+  - Support GLB files in viewer: upload, drag-and-drop, and multi-model federation
+  - Detect GLB format via magic bytes (0x46546C67)
+
 ## 1.3.0
 
 ### Minor Changes
