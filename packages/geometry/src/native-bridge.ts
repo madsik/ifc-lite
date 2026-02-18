@@ -27,6 +27,17 @@ interface TauriInternals {
   invoke: InvokeFn;
 }
 
+async function loadTauriEventModule(): Promise<{ listen: ListenFn } | null> {
+  try {
+    // Keep this non-literal so web bundlers do not resolve Tauri modules at build time.
+    const specifier = '@tauri-apps/api/' + 'event';
+    const dynamicImport = new Function('s', 'return import(s)') as (s: string) => Promise<{ listen: ListenFn }>;
+    return await dynamicImport(specifier);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Native Tauri bridge for desktop apps
  *
@@ -52,10 +63,10 @@ export class NativeBridge implements IPlatformBridge {
 
     // For event listening, we still need the event module
     // Use dynamic import with try-catch for better error handling
-    try {
-      const event = await import('@tauri-apps/api/event');
-      this.listen = event.listen;
-    } catch {
+    const eventModule = await loadTauriEventModule();
+    if (eventModule?.listen) {
+      this.listen = eventModule.listen;
+    } else {
       // Event listening is optional - streaming will fall back to non-streaming
       console.warn('[NativeBridge] Event API not available, streaming will be limited');
     }
