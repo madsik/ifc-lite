@@ -194,6 +194,7 @@ import { INSTANCED_RTE_DELTA_SLOT } from './instanced-vertex-layout.js';
 import { shadowOccluderBatches } from './shadow-occluder-batches.js';
 import { captureRendererScreenshot } from './renderer-screenshot.js';
 import { beginRendererColorFrameCapture, cancelRendererColorFrame, discardRendererColorFrameReadback, encodeRendererColorFrameCapture, requestRendererColorFrame, retryRendererColorFrame, settleRendererColorFrameCapture, type RendererColorFrame, type RendererColorFrameCapture } from './renderer-color-readback.js';
+import { planTransparentDraws } from './transparent-nearest-surface.js';
 import { shouldRouteMeshTransparent, shouldRouteBatchTransparent, splitVisibleIdsByPromotion, DEFAULT_GHOST_ALPHA } from './overlay-routing.js';
 import { batchEntityIdAnchor, batchHasColorOverride, packOverrideParams } from './entity-color-table.js';
 import { XRayAlpha, XRayEpochTracker, type AlphaBatchLike } from './xray-alpha.js';
@@ -2878,12 +2879,17 @@ export class Renderer {
                     pass.setPipeline(this.pipeline.getPipeline());
                 }
 
-                // Render transparent BATCHED meshes with transparent pipeline (after opaque batches and selections)
+                // Render transparent BATCHED meshes with transparent pipeline (after opaque batches and selections).
+                // With transparentNearestSurface: ghosts, then a depth pre-pass, then colour at the nearest depth.
                 if (transparentBatches.length > 0) {
+                    const nearestSurface = options.transparentNearestSurface === true;
+                    const nearestFor = (batch: typeof allBatchedMeshes[0]) =>
+                        this.pipeline!.getNearestSurfacePipelines(!!batch.quantized, () => this.requestRender());
                     pass.setPipeline(this.pipeline.getTransparentPipeline());
-                    for (const batch of transparentBatches) {
-                        pass.setPipeline(pipeFor(batch, 'transparent'));
-                        renderBatch(batch);
+                    for (const draw of planTransparentDraws(transparentBatches, nearestSurface, (b) => xray.isGhostBatch(b), (b) => nearestFor(b) !== null)) {
+                        const nearest = draw.kind === 'plain' ? null : nearestFor(draw.batch);
+                        pass.setPipeline(nearest ? nearest[draw.kind as 'depth' | 'colour'] : pipeFor(draw.batch, 'transparent'));
+                        renderBatch(draw.batch);
                     }
                 }
 

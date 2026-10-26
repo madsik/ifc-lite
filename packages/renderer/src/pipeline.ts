@@ -8,6 +8,7 @@
 
 import { WebGPUDevice } from './device.js';
 import { mainShaderSource } from './shaders/main.wgsl.js';
+import { nearestSurfaceDescriptor, type NearestSurfaceStage } from './transparent-nearest-surface.js';
 import { ghostShaderSource } from './shaders/ghost.wgsl.js';
 import { INSTANCED_VERTEX_BUFFERS } from './instanced-vertex-layout.js';
 import { texturedShaderSource } from './shaders/textured.wgsl.js';
@@ -40,6 +41,8 @@ export class RenderPipeline {
     private quantizedPipelines: Partial<Record<'opaque' | 'transparent' | 'overlay', GPURenderPipeline>> = {};
     private makeGhostPipelineAsync: ((quantized: boolean) => Promise<GPURenderPipeline>) | null = null;
     private readonly ghostPipelines = new Map<boolean, GPURenderPipeline | null>();
+    private makeNearestSurfacePipelineAsync: ((stage: NearestSurfaceStage, quantized: boolean) => Promise<GPURenderPipeline>) | null = null;
+    private readonly nearestSurfacePipelines = new Map<string, GPURenderPipeline | null>();
     private instancedTransparentPipelineTried = false;  // built-or-failed once; don't retry a rejecting backend every frame
     private selectionPipeline: GPURenderPipeline;  // Pipeline for selected meshes (renders on top)
     private transparentPipeline: GPURenderPipeline;  // Pipeline for transparent meshes with alpha blending
@@ -480,6 +483,12 @@ export class RenderPipeline {
             ...(quantized && { vertex: quantizedVertex }),
             fragment: { ...transparentPipelineDescriptor.fragment!, module: this.device.createShaderModule({ code: ghostShaderSource }) },
         });
+        // Nearest see-through surface (RenderOptions.transparentNearestSurface):
+        // the transparent descriptor as a depth pre-pass and as a colour pass at
+        // that depth. Built on first use, like the ghost pipeline.
+        this.makeNearestSurfacePipelineAsync = (stage, quantized) => this.device.createRenderPipelineAsync(
+            nearestSurfaceDescriptor({ ...transparentPipelineDescriptor, ...(quantized && { vertex: quantizedVertex }) }, stage),
+        );
 
         // ── Textured pipeline (#961) ──
         // A separate pipeline for meshes carrying an IFC surface texture. It
@@ -842,6 +851,28 @@ export class RenderPipeline {
             );
         }
         return this.ghostPipelines.get(quantized) ?? null;
+    }
+
+    /**
+     * The nearest-surface pipelines (pre-pass and colour), or null until both
+     * are built: the first call starts the async builds and `onReady` runs when
+     * one lands. A failed build leaves the batches on the transparent pipeline.
+     */
+    getNearestSurfacePipelines(quantized: boolean, onReady: () => void): { depth: GPURenderPipeline; colour: GPURenderPipeline } | null {
+        const get = (stage: NearestSurfaceStage): GPURenderPipeline | null => {
+            const key = `${stage}:${quantized}`;
+            if (!this.nearestSurfacePipelines.has(key)) {
+                this.nearestSurfacePipelines.set(key, null);
+                this.makeNearestSurfacePipelineAsync?.(stage, quantized).then(
+                    (pipeline) => { this.nearestSurfacePipelines.set(key, pipeline); onReady(); },
+                    (err) => console.warn('[Pipeline] nearest-surface pipeline build failed; translucent batches stay on the transparent pipeline:', err),
+                );
+            }
+            return this.nearestSurfacePipelines.get(key) ?? null;
+        };
+        const depth = get('depth');
+        const colour = get('colour');
+        return depth && colour ? { depth, colour } : null;
     }
 
     /** @deprecated Unused since #6076 (overrides shade from the entity colour table). TODO(remove-by: next major, #6076) */

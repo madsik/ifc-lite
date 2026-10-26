@@ -314,6 +314,15 @@ export interface RenderOptions {
   ghostExceptIds?: Set<number> | null;
   /** Alpha (0..1) for ghosted meshes under {@link ghostExceptIds}. Default 0.12. */
   ghostAlpha?: number;
+  /**
+   * Draw only the nearest translucent surface per pixel, blended once over the
+   * opaque scene, instead of every translucent face in batch order (a depth
+   * pre-pass of the translucent batches, then their colour at that depth; see
+   * transparent-nearest-surface.ts). For a model drawn mostly see-through, so
+   * that what lies behind a surface is never painted over it. X-Ray ghosts keep
+   * their whole faint shell. Batched geometry only. Default false.
+   */
+  transparentNearestSurface?: boolean;
   // Building rotation in radians (from IfcSite placement) - used to orient section planes
   buildingRotation?: number;
   selectedModelIndex?: number;    // Model index for multi-model selection (must match mesh.modelIndex)
