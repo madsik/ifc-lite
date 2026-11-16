@@ -9,7 +9,7 @@
  * `<title>` with `Untitled IDS`, and the audit reads those texts as missing.
  * An author may write the same texts (both are `xs:string` in the XSD), so
  * the parser records here the objects whose value it read from the XML, and
- * the audit does not read an authored value as missing (#ISSUE).
+ * the audit does not read an authored value as missing (#10542).
  *
  * The record lives beside the document rather than in it, so `parseIDS`
  * returns the same objects as before. A document built in code, or a copy

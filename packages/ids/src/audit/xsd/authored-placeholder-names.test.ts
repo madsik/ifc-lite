@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 /**
- * #ISSUE: a specification name or an IDS title that the author wrote is
+ * #10542: a specification name or an IDS title that the author wrote is
  * not read as missing because it reads like the parser's fill-in text.
  *
  * `parseIDS` fills a missing `@name` with `Specification <n>` and a missing
@@ -68,7 +68,7 @@ async function audits(xml: string): Promise<IDSAuditReport[]> {
 const MISSING_NAME = (i: number) => `error specifications[${i}].name: specification is missing a non-empty @name attribute`;
 const MISSING_TITLE = 'warning info.title: IDS document is missing a non-empty <info><title> element';
 
-describe('#ISSUE: an authored name or title that reads like the parser fill-in text', () => {
+describe('#10542: an authored name or title that reads like the parser fill-in text', () => {
   it('a specification named "Specification 3" by its author is valid', async () => {
     for (const report of await audits(ids(TITLE, ['name="Specification 3"']))) {
       expect(nameAndTitleIssues(report)).toEqual([]);
@@ -107,7 +107,7 @@ describe('#ISSUE: an authored name or title that reads like the parser fill-in t
   });
 });
 
-describe('#ISSUE controls: missing values, parseIDS and documents built in code stay as they were', () => {
+describe('#10542 controls: missing values, parseIDS and documents built in code stay as they were', () => {
   it('a specification with no @name is still reported, by both entry points', async () => {
     const [fromXml, fromDoc] = await audits(ids(TITLE, ['name="Walls"', '']));
     expect(nameAndTitleIssues(fromXml)).toEqual([

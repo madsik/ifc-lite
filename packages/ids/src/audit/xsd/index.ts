@@ -107,7 +107,7 @@ export function runXsdAudit(doc: IDSDocument): IDSAuditIssue[] {
     // accept it, and consumers care more about specification content
     // than the document-level title. "Untitled IDS" is the parser's
     // fill-in for a missing title, unless the parser read it from the
-    // XML (#ISSUE).
+    // XML (#10542).
     issues.push({
       severity: 'warning',
       code: 'E_XSD_REQUIRED_ATTR',
@@ -156,7 +156,7 @@ function auditSpecification(
 ): void {
   const path = `specifications[${i}]`;
   // "Specification <n>" is the parser's fill-in for a missing @name, unless
-  // the parser read it from the XML (#ISSUE).
+  // the parser read it from the XML (#10542).
   if (
     !spec.name ||
     spec.name.trim() === '' ||

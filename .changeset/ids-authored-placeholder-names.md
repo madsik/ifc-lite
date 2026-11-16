@@ -2,7 +2,7 @@
 "@ifc-lite/ids": patch
 ---
 
-The IDS audit no longer reads an authored name or title as missing (#ISSUE). `parseIDS` fills a missing specification `@name` with `Specification <n>` and a missing `<title>` with `Untitled IDS`. The audit read those texts as missing wherever they came from. So a specification whose author named it `Specification 3` got the error `E_XSD_REQUIRED_ATTR` ("specification is missing a non-empty @name attribute"), and an IDS whose author wrote `<title>Untitled IDS</title>` got the missing-title warning. Both are valid in the IDS XSD.
+The IDS audit no longer reads an authored name or title as missing (#10542). `parseIDS` fills a missing specification `@name` with `Specification <n>` and a missing `<title>` with `Untitled IDS`. The audit read those texts as missing wherever they came from. So a specification whose author named it `Specification 3` got the error `E_XSD_REQUIRED_ATTR` ("specification is missing a non-empty @name attribute"), and an IDS whose author wrote `<title>Untitled IDS</title>` got the missing-title warning. Both are valid in the IDS XSD.
 
 The parser now records which names and titles it read from the XML, and the audit reads those as written. This holds for `auditIDSDocument` and for `auditIDSStructure` on a document from `parseIDS`. One consequence: an IDS with no `@name` or no `<title>`, parsed and written back with `writeIdsXml`, holds the fill-in texts in the new XML, so the audit of the new XML reads them as written and no longer reports them. The audit of the original XML still does.
 

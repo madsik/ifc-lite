@@ -177,7 +177,7 @@ function parseInfo(root: Element): IDSInfo {
     milestone: getChildText(info, 'milestone'),
     description: getChildText(info, 'description'),
   };
-  // An authored "Untitled IDS" is a title, not the fill-in (#ISSUE).
+  // An authored "Untitled IDS" is a title, not the fill-in (#10542).
   if (title) markTitleAuthored(parsed);
   return parsed;
 }
@@ -275,7 +275,7 @@ function parseSpecification(el: Element, index: number): IDSSpecification {
     minOccurs,
     maxOccurs,
   };
-  // An authored "Specification <n>" is a name, not the fill-in (#ISSUE).
+  // An authored "Specification <n>" is a name, not the fill-in (#10542).
   if (nameAttr) markNameAuthored(spec);
   return spec;
 }
