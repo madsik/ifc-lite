@@ -90,10 +90,8 @@ export function checkEntityFacet(
     };
   }
 
-  // Per IDS 1.0 spec, entity-name simpleValue literals MUST be
-  // uppercase (`IFCWALL`, not `IfcWall`). Reject malformed authoring
-  // outright before attempting the case-insensitive comparison —
-  // otherwise mixed-case literals would silently match.
+  // A simple value that is not upper case is rejected, as buildingSMART's
+  // invalid-entities_must_be_specified_as_uppercase_strings requires.
   if (
     facet.name.type === 'simpleValue' &&
     facet.name.value !== facet.name.value.toUpperCase()

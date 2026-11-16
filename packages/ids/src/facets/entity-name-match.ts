@@ -16,6 +16,12 @@
  * A simple value is the facet's own concern: the entity facet rejects a
  * simple value that is not upper case, and an upper-case one meets the
  * upper-case class exactly, as before.
+ *
+ * The class is read with `String()`: `checkEntityFacet` is exported, and a
+ * JavaScript accessor may answer `getEntityType` with a value that is not a
+ * string. `matchConstraint` read such a value as text before, so `42` met
+ * no name and an object whose `toString` gives `IfcWall` met `IFCWALL`; it
+ * must not throw now.
  */
 
 import type { IDSConstraint } from '../types.js';
@@ -23,5 +29,5 @@ import { matchConstraint } from '../constraints/index.js';
 
 /** Does an IDS entity name constraint select this IFC class (any spelling of it)? */
 export function matchesEntityName(name: IDSConstraint, ifcClass: string): boolean {
-  return matchConstraint(name, ifcClass.toUpperCase());
+  return matchConstraint(name, String(ifcClass).toUpperCase());
 }

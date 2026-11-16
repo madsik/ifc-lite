@@ -10,6 +10,7 @@ What changes, in the entity facet and in a partOf facet's entity:
 - An enumeration selects the classes it lists in upper case. A value such as `IfcWall` now selects nothing. The audit already reports such a value as the error `E_IFC_ENTITY_CASE`.
 - On IFC2X3, the occurrence/type mapping table reads the same way: a pattern `IFCAIRTERMINAL` selects a flow terminal typed by an air terminal type, and `IfcAirTerminal` no longer does.
 - In a requirement, an element whose class the name no longer selects fails, where it passed.
+- A specification whose applicability is such a pattern now selects nothing: with `minOccurs="1"` it fails, and with `maxOccurs="0"` it passes where it failed. The audit does not report a PascalCase pattern.
 
 What does not change:
 

@@ -29,6 +29,9 @@ import { IfcParser } from '@ifc-lite/parser';
 import { parseIDS } from '../parser/xml-parser.js';
 import { createDataAccessor } from '../bridge/index.js';
 import { validateIDS } from '../validation/validator.js';
+import { checkEntityFacet, entityFacetPasses } from './entity-facet.js';
+import { createMockAccessor } from './test-helpers.js';
+import type { IDSConstraint, IDSEntityFacet, IFCDataAccessor } from '../types.js';
 
 const gid = (n: number) => String(n).padStart(22, '0');
 
@@ -129,8 +132,9 @@ describe('#ISSUE: an entity name pattern or enumeration meets the upper-case cla
 
   it('IFC2X3 mapping table: a pattern naming IFCAIRTERMINAL selects the typed flow terminal, IfcAirTerminal does not', async () => {
     // IfcTester 0.8.3 does not apply buildingSMART's IFC2X3 occurrence/type
-    // mapping table to a pattern and selects nothing for either; IFC Lite
-    // applies it, and the alias is an upper-case class name like any other.
+    // mapping table at all (it fails buildingSMART's own pass cases for it),
+    // so it selects nothing for either. IFC Lite applies the table, and the
+    // alias is an upper-case class name like any other.
     const xml = ids('IFC2X3', [
       ['pattern IFCAIRTERMINAL', entity(pattern('IFCAIRTERMINAL'))],
       ['pattern IfcAirTerminal', entity(pattern('IfcAirTerminal'))],
@@ -178,4 +182,35 @@ describe('#ISSUE controls: simple values stay as they were', () => {
       ['partOf simple IfcBuildingStorey', ELEMENTS],
     ]);
   });
+});
+
+describe('#ISSUE controls: a getEntityType answer that is not a string answers as before', () => {
+  // checkEntityFacet is exported, and a JavaScript accessor is not held to
+  // `string | undefined`. Before #ISSUE the class went to matchConstraint as
+  // it was, which reads it as text: 42 met no name, and an object whose
+  // toString gives 'IfcWall' met IFCWALL. Neither may throw.
+  const names: IDSConstraint[] = [
+    { type: 'simpleValue', value: 'IFCWALL' },
+    { type: 'pattern', pattern: 'IFCWALL' },
+    { type: 'enumeration', values: ['IFCWALL'] },
+  ];
+  const answering = (entityType: unknown): IFCDataAccessor => ({
+    ...createMockAccessor([]),
+    getSchemaVersion: () => 'IFC4',
+    getEntityType: () => entityType as string,
+  });
+  const cases: Array<[string, unknown, boolean]> = [
+    ['42', 42, false],
+    ["an object whose toString gives 'IfcWall'", { toString: () => 'IfcWall' }, true],
+  ];
+  for (const [label, entityType, passed] of cases) {
+    it(`${label}: a simple value, a pattern and an enumeration IFCWALL give passed ${passed}`, () => {
+      const accessor = answering(entityType);
+      for (const name of names) {
+        const facet: IDSEntityFacet = { type: 'entity', name };
+        expect(checkEntityFacet(facet, 1, accessor).passed).toBe(passed);
+        expect(entityFacetPasses(facet, 1, accessor)).toBe(passed);
+      }
+    });
+  }
 });
