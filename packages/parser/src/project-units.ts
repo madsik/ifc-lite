@@ -71,7 +71,8 @@ interface DeclaredUnit extends Omit<UnitEntry, 'resolved'> {
  *  call: a cycle is unresolved, never a throw. On the parsed-source path so is
  *  a chain past the depth cap or a unit whose charged reads run past the budget,
  *  while native callers keep their own read limit (#7547). A flat derived unit,
- *  as the schema types it, is never charged. */
+ *  as the schema types it, is never charged. With a native reader, a factor
+ *  whose component is not an IfcSIUnit stays unresolved (#ISSUE). */
 export function resolveUnitByRef(
   extractor: EntityExtractor,
   entityIndex: EntityByIdIndexLike,
@@ -245,7 +246,9 @@ function conversionFactorScale(
   const comp = readEntity && typeof compRef === 'number' ? readEntity(compRef) : cRef ? once(walk, cRef, 'factorUnit', () => extractor.extractEntity(cRef)) : null;
   if (!comp || typeof compRef !== 'number') return null;
   if (comp.type.toUpperCase() !== 'IFCSIUNIT') {
-    // Its path entry refuses a cycle through factors; an offset over a unit with its own offset would need both.
+    // Followed only on a bounded walk (`followsComponents`). Its path entry
+    // refuses a cycle through factors; an offset over a unit with its own offset would need both.
+    if (!walk.followsComponents) return null;
     const unit = walkDeclaredUnit(extractor, entityIndex, compRef, readEntity, walk, comp)?.resolved;
     return unit && !(withOffset && unit.siOffset) ? value * unit.siScale : null;
   }
@@ -332,7 +335,8 @@ export function extractProjectUnits(
       if (readEntity) throw new ProjectUnitReadError('Native project unit assignment member is unreadable');
       continue;
     }
-    const walk = newUnitWalk(!readEntity);
+    // The read limit above bounds a native walk here, so it follows components too.
+    const walk = newUnitWalk(!readEntity, true);
     const walked = walkDeclaredUnit(extractor, entityIndex, unitRef, readEntity, walk);
     // A refused walk keeps the unit declared, unresolved, never a partial scale (#7547).
     const entry = walked && walk.refused ? { ...walked, resolved: null } : walked;

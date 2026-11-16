@@ -118,12 +118,20 @@ export interface UnitWalk {
   refused: boolean;
   /** Whether the depth cap, the budget and the memo apply: the parsed-source path only (see above). */
   readonly budgeted: boolean;
+  /**
+   * Whether a conversion factor's `UnitComponent` that is not an `IfcSIUnit`
+   * is resolved on this walk (#ISSUE). Only where the whole walk is bounded:
+   * by this walk's budget on the parsed-source path, or by the read limit of
+   * `extractProjectUnits` with a native reader. Any other native walk has
+   * neither, so there such a component stays unresolved, as before.
+   */
+  readonly followsComponents: boolean;
   /** Free reads made inside the top-level unit, by place and id, and what each gave. */
   readonly memo: Partial<Record<UnitPlace, Map<number, unknown>>>;
 }
 
-export function newUnitWalk(budgeted: boolean): UnitWalk {
-  return { path: new Set(), derived: 0, reads: 0, bytes: 0, refused: false, budgeted, memo: {} };
+export function newUnitWalk(budgeted: boolean, followsComponents = budgeted): UnitWalk {
+  return { path: new Set(), derived: 0, reads: 0, bytes: 0, refused: false, budgeted, followsComponents, memo: {} };
 }
 
 /** Put `ref` on the path; `false`, and the walk refused, for a cycle or, when budgeted, past the depth cap. */

@@ -13,8 +13,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { IfcParser, extractProjectUnits, extractPropertiesOnDemand } from './index.js';
+import { IfcParser, extractProjectUnits, extractPropertiesOnDemand, extractQuantitiesOnDemand } from './index.js';
 import { EntityExtractor } from './entity-extractor.js';
+import type { MetadataReadView } from './effective-metadata-record.js';
 
 // Metre project. Each property on wall #100 names one unit below as its own Unit.
 const UNITS = `#2=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);
@@ -183,5 +184,71 @@ describe('the project unit assignment reads the same chain (#ISSUE)', () => {
   it('keeps a project foot over the metre as it was (control)', async () => {
     const store = await parse(ifc('#60', "#60=IFCCONVERSIONBASEDUNIT(#10,.LENGTHUNIT.,'FOOT',#61);\n#61=IFCMEASUREWITHUNIT(IFCLENGTHMEASURE(0.3048),#2);"));
     expect(extractProjectUnits(store.source, store.entityIndex).resolvedForUnitType('LENGTHUNIT')).toEqual({ symbol: 'ft', siScale: 0.3048 });
+  });
+});
+
+describe('a walk follows the component only where it is bounded (#ISSUE)', () => {
+  // With a session view a property's or quantity's own Unit is read through the
+  // view, on a walk with no depth cap, read budget or memo. There a component
+  // that is not an IfcSIUnit stays unresolved, as before; following it let a
+  // long chain overflow the stack and a fan-out take exponential time. Without
+  // a view the parsed-source walk follows it within its budget (#7547).
+  const view: MetadataReadView = {
+    isDeleted: () => false, getNewEntities: () => [], getNewEntity: () => null,
+    getPositionalMutationsForEntity: () => null, getAttributeMutationsForEntity: () => [], getMutationRevision: () => 1,
+  };
+
+  /** `n` conversion-based units from #1000, each 1 of the one below, the lowest 1 m. Returns the lines and the top unit. */
+  const chain = (n: number): [string, number] => [Array.from({ length: n }, (_, i) => {
+    const unit = 1000 + 2 * i;
+    return `#${unit}=IFCCONVERSIONBASEDUNIT(#10,.LENGTHUNIT.,'link ${i}',#${unit + 1});\n#${unit + 1}=IFCMEASUREWITHUNIT(IFCLENGTHMEASURE(1.),#${i === 0 ? 2 : unit - 2});`;
+  }).join('\n'), 1000 + 2 * (n - 1)];
+
+  /** `k` levels from #500000: a conversion-based unit over a derived unit whose two elements both name the next level's unit. */
+  const fan = (k: number): [string, number] => [[...Array.from({ length: k }, (_, i) => {
+    const b = 500000 + 10 * i;
+    return [`#${b}=IFCCONVERSIONBASEDUNIT(#10,.LENGTHUNIT.,'c${i}',#${b + 1});`, `#${b + 1}=IFCMEASUREWITHUNIT(IFCLENGTHMEASURE(1.),#${b + 2});`,
+      `#${b + 2}=IFCDERIVEDUNIT((#${b + 3},#${b + 4}),.USERDEFINED.,'d${i}');`,
+      `#${b + 3}=IFCDERIVEDUNITELEMENT(#${b + 10},1);`, `#${b + 4}=IFCDERIVEDUNITELEMENT(#${b + 10},1);`].join('\n');
+  }), `#${500000 + 10 * k}=IFCCONVERSIONBASEDUNIT(#10,.LENGTHUNIT.,'bottom',#${500001 + 10 * k});`,
+  `#${500001 + 10 * k}=IFCMEASUREWITHUNIT(IFCLENGTHMEASURE(1.),#2);`].join('\n'), 500000];
+
+  const lazily = <T>(make: () => Promise<T>) => { let made: Promise<T> | undefined; return () => (made ??= make()); };
+  const withProperty = ([lines, unit]: [string, number]) => parse(ifc('#2', `${lines}
+#280=IFCPROPERTYSINGLEVALUE('Link',$,IFCLENGTHMEASURE(1.),#${unit});
+#281=IFCPROPERTYSET('2Q1nV8mQz1Hw4l3yXgS0aB',$,'Chain',$,(#280));
+#282=IFCRELDEFINESBYPROPERTIES('1kT5pW0rZ3Lb8n6yRcU2eD',$,$,$,(#100),#281);`));
+  const longChain = lazily(() => withProperty(chain(20_000)));
+  const fanOut = lazily(() => withProperty(fan(24)));
+  const quantityChain = lazily(() => {
+    const [lines, unit] = chain(300);
+    return parse(ifc('#2', `${lines}
+#283=IFCQUANTITYLENGTH('Len',$,#${unit},1.,$);
+#284=IFCELEMENTQUANTITY('3Hf7qY2sA5Nd0p8uTeW4gF',$,'Qto_Chain',$,$,(#283));
+#285=IFCRELDEFINESBYPROPERTIES('0Xj9rA4uC7Pf2r0wVgY6iH',$,$,$,(#100),#284);`));
+  });
+  const link = (store: Awaited<ReturnType<typeof parse>>, readView?: MetadataReadView) => {
+    const p = extractPropertiesOnDemand(store, 100, readView).find((s) => s.name === 'Chain')?.properties[0];
+    return { unit: p?.unit, siScale: p?.unitSiScale };
+  };
+  const quantities = (store: Awaited<ReturnType<typeof parse>>, readView?: MetadataReadView) => extractQuantitiesOnDemand(store, 100, readView)
+    .flatMap((s) => s.quantities).map((q) => [q.name, q.value, q.explicitUnitSiScale, q.explicitUnitUnresolved]);
+
+  it('with a view, returns a property whose own unit tops a chain of 20,000 units, unresolved as before', async () => {
+    expect(link(await longChain(), view)).toEqual({ unit: '#40998', siScale: undefined });
+  });
+
+  it('with a view, returns a property whose own unit tops a fan-out of 24 levels, unresolved as before', async () => {
+    expect(link(await fanOut(), view)).toEqual({ unit: '#500000', siScale: undefined });
+  });
+
+  it('with a view, returns the quantities of an element whose quantity unit tops a chain of 300 units', async () => {
+    expect(quantities(await quantityChain(), view)).toEqual([['Len', 1, undefined, true]]);
+  });
+
+  it('without a view, refuses the same chains and fan-out at the walk bounds, so they stay unresolved', async () => {
+    expect(link(await longChain())).toEqual({ unit: '#40998', siScale: undefined }); // the depth cap
+    expect(link(await fanOut())).toEqual({ unit: '#500000', siScale: undefined }); // the read budget or the depth cap
+    expect(quantities(await quantityChain())).toEqual([['Len', 1, undefined, true]]);
   });
 });
