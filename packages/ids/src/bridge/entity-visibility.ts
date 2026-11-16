@@ -52,15 +52,6 @@ export interface OverlayEntityLookup {
 }
 
 /**
- * Attributes the parser's `extractAllEntityAttributes` omits
- * (`SKIP_DISPLAY_ATTRS`). A created entity reports the same attribute names a
- * parsed one does. Its GlobalId is still answered through `globalIdOf`.
- */
-const SKIPPED_ATTRIBUTES = new Set([
-  'GlobalId', 'OwnerHistory', 'ObjectPlacement', 'Representation', 'HasPropertySets', 'RepresentationMaps',
-]);
-
-/**
  * Index the overlay's created and retyped entities once per accessor. The
  * validator's `getEntityType` is hot (once per candidate), and
  * `getNewEntities()` copies on every call.
@@ -98,8 +89,10 @@ export function overlayEntityLookup(view: EntityVisibilityView): OverlayEntityLo
       if (retype) return retype.newType;
       return created.get(expressId)?.type;
     },
+    // Every scalar attribute the entity sets, GlobalId included: a created
+    // entity reports the same attribute names a parsed one does (#ISSUE).
     createdAttributes(expressId) {
-      return namedAttributes(expressId)?.filter((a) => !SKIPPED_ATTRIBUTES.has(a.name));
+      return namedAttributes(expressId);
     },
     globalIdOf(expressId) {
       const value = namedAttributes(expressId)?.find((a) => a.name === 'GlobalId')?.value;
