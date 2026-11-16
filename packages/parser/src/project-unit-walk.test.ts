@@ -378,7 +378,7 @@ describe('inside the top-level unit, only what the schema allows is free (#7547)
       `#${b + 3}=IFCDIMENSIONALEXPONENTS(0,0,0,0,0,0,0);`], [0], false],
     ['a foot whose factor names an IfcDerivedUnit', (b: number) => footAt(b, { component: `#${b + 2}=IFCDERIVEDUNIT((#${b + 4}),.USERDEFINED.,'d');` }), [2], true],
     ['a foot whose factor names an IfcMonetaryUnit', (b: number) => footAt(b, { component: `#${b + 2}=IFCMONETARYUNIT('EUR');` }), [2], true],
-    // A UnitComponent that is not an IfcSIUnit is taken at 1.0, as before.
+    // A UnitComponent that is a conversion-based unit is resolved through it (#ISSUE); its own factor and metre are free too.
     ['a foot whose factor names an IfcConversionBasedUnit', (b: number) => [
       ...footAt(b, { component: `#${b + 2}=IFCCONVERSIONBASEDUNIT(#${b + 3},.LENGTHUNIT.,'INCH',#${b + 4});` }),
       `#${b + 4}=IFCMEASUREWITHUNIT(IFCLENGTHMEASURE(0.0254),#${b + 5});`, METRE(b + 5)], [2], true],

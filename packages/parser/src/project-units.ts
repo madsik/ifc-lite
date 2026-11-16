@@ -90,12 +90,13 @@ function resolveUnit(extractor: EntityExtractor, entityIndex: EntityByIdIndexLik
 }
 
 /** The only way into {@link resolveDeclaredUnit}: a cycle, or on the parsed-source
- *  path a chain past the depth cap, is refused before anything is read (#7547). */
-function walkDeclaredUnit(extractor: EntityExtractor, entityIndex: EntityByIdIndexLike,
-  ref: number, readEntity: UnitEntityReader | undefined, walk: UnitWalk): DeclaredUnit | null {
+ *  path a chain past the depth cap, is refused before anything is read (#7547).
+ *  `known` is a factor's UnitComponent, already read (and charged) as one. */
+function walkDeclaredUnit(extractor: EntityExtractor, entityIndex: EntityByIdIndexLike, ref: number,
+  readEntity: UnitEntityReader | undefined, walk: UnitWalk, known?: ReturnType<UnitEntityReader>): DeclaredUnit | null {
   if (!enterUnit(walk, ref)) return null;
   try {
-    return resolveDeclaredUnit(extractor, entityIndex, ref, readEntity, walk);
+    return resolveDeclaredUnit(extractor, entityIndex, ref, readEntity, walk, known);
   } finally {
     walk.path.delete(ref);
   }
@@ -107,12 +108,13 @@ function resolveDeclaredUnit(
   ref: number,
   readEntity: UnitEntityReader | undefined,
   walk: UnitWalk,
+  known?: ReturnType<UnitEntityReader>,
 ): DeclaredUnit | null {
   // @raw-entity-enumeration-ok resolve a declared unit from the parsed source index
   const entRef = entityIndex.byId.get(ref);
   // Free at the top level and for a named unit in the top-level unit; else charged before the read (#7547).
-  if (!chargeRead(walk, entRef, 'unit')) return null;
-  const entity = readEntity ? readEntity(ref) : entRef ? extractor.extractEntity(entRef) : null;
+  if (!known && !chargeRead(walk, entRef, 'unit')) return null;
+  const entity = known ?? (readEntity ? readEntity(ref) : entRef ? extractor.extractEntity(entRef) : null);
   if (!entity) return null;
   const attrs = entity.attributes ?? [];
   const cleanEnum = (v: unknown): string | null =>
@@ -234,15 +236,19 @@ function conversionFactorScale(
   if (value === undefined || !(Number.isFinite(value) && value > 0)) return null;
 
   // A dangling or unreadable UnitComponent leaves the factor unknown, not SI
-  // (#4690). A component that is not an IfcSIUnit is taken at 1.0, as before:
-  // the Rust resolver follows it, this reader does not.
+  // (#4690). Another kind of unit (a conversion-based or derived one) is
+  // resolved on this walk, as the Rust resolver does (#3616, #ISSUE).
   const compRef = attrs[1];
   // @raw-entity-enumeration-ok follow the source unit component reference
   const cRef = typeof compRef === 'number' ? entityIndex.byId.get(compRef) : undefined;
   if (!chargeRead(walk, cRef, 'factorUnit')) return null;
   const comp = readEntity && typeof compRef === 'number' ? readEntity(compRef) : cRef ? once(walk, cRef, 'factorUnit', () => extractor.extractEntity(cRef)) : null;
-  if (!comp) return null;
-  if (comp.type.toUpperCase() !== 'IFCSIUNIT') return readEntity || withOffset ? null : value;
+  if (!comp || typeof compRef !== 'number') return null;
+  if (comp.type.toUpperCase() !== 'IFCSIUNIT') {
+    // Its path entry refuses a cycle through factors; an offset over a unit with its own offset would need both.
+    const unit = walkDeclaredUnit(extractor, entityIndex, compRef, readEntity, walk, comp)?.resolved;
+    return unit && !(withOffset && unit.siOffset) ? value * unit.siScale : null;
+  }
   const cAttrs = comp.attributes ?? [];
   const name = typeof cAttrs[3] === 'string' ? cAttrs[3] : null;
   // An offset over a unit that has its own offset (°C) would need both.
