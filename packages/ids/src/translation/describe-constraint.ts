@@ -106,6 +106,15 @@ function describeBounds(
   translations: Translations
 ): string {
   const t = translations.constraints.bounds;
+  // A facet that could not be read makes the restriction reject every
+  // value (#4231); "any value" said the opposite (#ISSUE).
+  const unreadable = constraint.unparseableFacets ?? [];
+  if (unreadable.length > 0) {
+    return interpolate(t.unreadable, {
+      facets: unreadable.map((f) => `xs:${f.facet}="${f.rawValue}"`).join(', '),
+    });
+  }
+
   // Date, time and duration bounds are kept as lexemes (#7399).
   const tb = constraint.temporalBounds;
   const minInclusive = tb?.minInclusive ?? constraint.minInclusive;
@@ -113,25 +122,28 @@ function describeBounds(
   const minExclusive = tb?.minExclusive ?? constraint.minExclusive;
   const maxExclusive = tb?.maxExclusive ?? constraint.maxExclusive;
 
-  if (minInclusive !== undefined && maxInclusive !== undefined) {
-    return interpolate(t.between, { min: minInclusive, max: maxInclusive });
+  // Every facet is enforced, so every facet is named, the lower bound
+  // first; only the first one used to be (#ISSUE).
+  const parts: string[] = [];
+  const pair = minInclusive !== undefined && maxInclusive !== undefined;
+  if (pair) parts.push(interpolate(t.between, { min: minInclusive, max: maxInclusive }));
+  else if (minInclusive !== undefined) parts.push(interpolate(t.atLeast, { min: minInclusive }));
+  if (minExclusive !== undefined) parts.push(interpolate(t.greaterThan, { min: minExclusive }));
+  if (!pair && maxInclusive !== undefined) parts.push(interpolate(t.atMost, { max: maxInclusive }));
+  if (maxExclusive !== undefined) parts.push(interpolate(t.lessThan, { max: maxExclusive }));
+  const counts: Array<[keyof typeof t, number | undefined]> = [
+    ['length', constraint.length],
+    ['minLength', constraint.minLength],
+    ['maxLength', constraint.maxLength],
+    ['totalDigits', constraint.totalDigits],
+    ['fractionDigits', constraint.fractionDigits],
+  ];
+  for (const [key, count] of counts) {
+    if (count !== undefined) parts.push(interpolate(t[key], { count }));
   }
 
-  if (minInclusive !== undefined) {
-    return interpolate(t.atLeast, { min: minInclusive });
-  }
-
-  if (maxInclusive !== undefined) {
-    return interpolate(t.atMost, { max: maxInclusive });
-  }
-
-  if (minExclusive !== undefined) {
-    return interpolate(t.greaterThan, { min: minExclusive });
-  }
-
-  if (maxExclusive !== undefined) {
-    return interpolate(t.lessThan, { max: maxExclusive });
-  }
-
-  return 'any value';
+  if (parts.length === 0) return 'any value';
+  return parts.reduce((first, second) =>
+    interpolate(translations.constraints.conjunction, { first, second })
+  );
 }

@@ -17,7 +17,6 @@ import type {
 import {
   conjunctiveFacetsOf,
   matchOneFamily,
-  NUMERIC_TOLERANCE,
 } from './match-family.js';
 import {
   matchDigitFacets,
@@ -106,6 +105,11 @@ function getBoundsMismatchReason(
     );
   }
 
+  // `matchBounds` reads the length facets first and rejects on them before
+  // any bound, so a text that breaks one is named by its length (#ISSUE).
+  const lengthReason = getLengthMismatchReason(constraint, actualValue);
+  if (lengthReason !== undefined) return lengthReason;
+
   if (constraint.temporalBounds !== undefined) {
     return getTemporalBoundsMismatchReason(constraint, actualValue);
   }
@@ -118,17 +122,13 @@ function getBoundsMismatchReason(
 
   const violations: string[] = [];
 
-  if (
-    constraint.minInclusive !== undefined &&
-    num < constraint.minInclusive - NUMERIC_TOLERANCE
-  ) {
+  // The same comparisons as `matchBounds`, which applies no tolerance: a
+  // value it rejects by less than 1e-6 used to get an empty reason (#ISSUE).
+  if (constraint.minInclusive !== undefined && num < constraint.minInclusive) {
     violations.push(`must be >= ${constraint.minInclusive}`);
   }
 
-  if (
-    constraint.maxInclusive !== undefined &&
-    num > constraint.maxInclusive + NUMERIC_TOLERANCE
-  ) {
+  if (constraint.maxInclusive !== undefined && num > constraint.maxInclusive) {
     violations.push(`must be <= ${constraint.maxInclusive}`);
   }
 
@@ -161,6 +161,38 @@ function getBoundsMismatchReason(
   }
 
   return `${num} ${violations.join(' and ')}`;
+}
+
+/**
+ * The xs:length, xs:minLength and xs:maxLength facets the value's text
+ * breaks, measured as `matchBounds` measures it; `undefined` when it breaks
+ * none (or the restriction has none).
+ */
+function getLengthMismatchReason(
+  constraint: IDSBoundsConstraint,
+  actualValue: string | number | boolean
+): string | undefined {
+  if (
+    constraint.length === undefined &&
+    constraint.minLength === undefined &&
+    constraint.maxLength === undefined
+  ) {
+    return undefined;
+  }
+  const text = String(actualValue);
+  const violations: string[] = [];
+  if (constraint.length !== undefined && text.length !== constraint.length) {
+    violations.push(`must have exactly ${constraint.length} characters`);
+  }
+  if (constraint.minLength !== undefined && text.length < constraint.minLength) {
+    violations.push(`must have at least ${constraint.minLength} characters`);
+  }
+  if (constraint.maxLength !== undefined && text.length > constraint.maxLength) {
+    violations.push(`must have at most ${constraint.maxLength} characters`);
+  }
+  return violations.length > 0
+    ? `"${text}" (${text.length} characters) ${violations.join(' and ')}`
+    : undefined;
 }
 
 /**
@@ -303,15 +335,13 @@ function formatBounds(constraint: IDSBoundsConstraint): string {
   const minExclusive = t?.minExclusive ?? constraint.minExclusive;
   const maxExclusive = t?.maxExclusive ?? constraint.maxExclusive;
 
+  // Every facet is enforced, so every facet is named: a min and max pair
+  // used to return here and drop the rest (#ISSUE).
   if (minInclusive !== undefined && maxInclusive !== undefined) {
-    return `between ${minInclusive} and ${maxInclusive}`;
-  }
-
-  if (minInclusive !== undefined) {
+    parts.push(`between ${minInclusive} and ${maxInclusive}`);
+  } else if (minInclusive !== undefined) {
     parts.push(`>= ${minInclusive}`);
-  }
-
-  if (maxInclusive !== undefined) {
+  } else if (maxInclusive !== undefined) {
     parts.push(`<= ${maxInclusive}`);
   }
 
@@ -321,6 +351,19 @@ function formatBounds(constraint: IDSBoundsConstraint): string {
 
   if (maxExclusive !== undefined) {
     parts.push(`< ${maxExclusive}`);
+  }
+
+  // Lengths count the characters of the value's text (`matchBounds`).
+  if (constraint.length !== undefined) {
+    parts.push(`exactly ${constraint.length} characters`);
+  }
+
+  if (constraint.minLength !== undefined) {
+    parts.push(`>= ${constraint.minLength} characters`);
+  }
+
+  if (constraint.maxLength !== undefined) {
+    parts.push(`<= ${constraint.maxLength} characters`);
   }
 
   if (constraint.totalDigits !== undefined) {

@@ -65,6 +65,12 @@ export const de = {
       atMost: 'höchstens {max}',
       greaterThan: 'größer als {min}',
       lessThan: 'kleiner als {max}',
+      length: 'genau {count} Zeichen lang',
+      minLength: 'mindestens {count} Zeichen lang',
+      maxLength: 'höchstens {count} Zeichen lang',
+      totalDigits: 'höchstens {count}-stellig',
+      fractionDigits: 'mit höchstens {count} Nachkommastellen angegeben',
+      unreadable: 'innerhalb einer nicht lesbaren Einschränkung ({facets})',
     },
   },
 

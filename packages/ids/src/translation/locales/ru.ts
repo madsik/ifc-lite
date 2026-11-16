@@ -46,6 +46,12 @@ export const ru = {
       atMost: "не более {max}",
       greaterThan: "больше, чем {min}",
       lessThan: "меньше {max}",
+      length: "длиной ровно {count} симв.",
+      minLength: "длиной не менее {count} симв.",
+      maxLength: "длиной не более {count} симв.",
+      totalDigits: "не более {count} цифр",
+      fractionDigits: "не более {count} знаков после запятой",
+      unreadable: "в пределах нечитаемого ограничения ({facets})",
     },
   },
   applicability: {

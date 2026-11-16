@@ -66,6 +66,15 @@ export const en = {
       atMost: 'at most {max}',
       greaterThan: 'greater than {min}',
       lessThan: 'less than {max}',
+      /** xs:length, xs:minLength and xs:maxLength: characters in the value's text. */
+      length: 'exactly {count} characters long',
+      minLength: 'at least {count} characters long',
+      maxLength: 'at most {count} characters long',
+      /** xs:totalDigits and xs:fractionDigits. */
+      totalDigits: 'at most {count} digits long',
+      fractionDigits: 'given to at most {count} decimal places',
+      /** A facet whose value cannot be read; the restriction then rejects every value. */
+      unreadable: 'within a restriction that cannot be read ({facets})',
     },
   },
 

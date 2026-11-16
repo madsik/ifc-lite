@@ -65,6 +65,12 @@ export const fr = {
       atMost: 'au plus {max}',
       greaterThan: 'supérieur à {min}',
       lessThan: 'inférieur à {max}',
+      length: "d'une longueur de {count} caractères exactement",
+      minLength: "d'une longueur d'au moins {count} caractères",
+      maxLength: "d'une longueur d'au plus {count} caractères",
+      totalDigits: "d'au plus {count} chiffres",
+      fractionDigits: "d'au plus {count} décimales",
+      unreadable: 'dans une restriction illisible ({facets})',
     },
   },
 

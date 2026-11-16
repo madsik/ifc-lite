@@ -37,9 +37,6 @@ import { translateXsdRegex } from './xsd-regex.js';
 import { matchBounds } from './match-bounds.js';
 import { assertGuardedRegexPattern, UnsafeRegexPatternError } from '@ifc-lite/regex-guard';
 
-/** Tolerance for the bounds matcher's exclusive comparators. */
-export const NUMERIC_TOLERANCE = 1e-6;
-
 /**
  * The conjunctive facets `parseRestriction` attached to this constraint
  * from the same `<xs:restriction>`, or `undefined` when it declared one
