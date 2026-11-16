@@ -74,6 +74,34 @@ function idsDataTypeOf(p: RawProp): Pick<ProjectedProperty, 'dataType' | 'dataTy
 }
 
 /**
+ * The boolean each STEP logical token names. The parser keeps the dots
+ * (`.T.`); the server's data model writes the bare token (`T`). An unknown
+ * IFCLOGICAL (`.U.`) names no boolean, so it is not listed.
+ */
+const STEP_BOOLEAN_TOKENS: ReadonlyMap<string, boolean> = new Map([
+  ['.T.', true],
+  ['T', true],
+  ['.F.', false],
+  ['F', false],
+]);
+
+/**
+ * A list or enumerated value whose members share IFCBOOLEAN or IFCLOGICAL,
+ * with each member as the boolean its token names and the display rebuilt
+ * from them, so the members compare as a single IFCBOOLEAN does (#ISSUE).
+ * Every other property is returned as it is.
+ */
+function withBooleanMembers(
+  converted: { value: ProjectedProperty['value']; values: string[] | undefined },
+  dataType: string | undefined
+): { value: ProjectedProperty['value']; values: ProjectedProperty['values'] } {
+  const type = dataType?.toUpperCase();
+  if (!converted.values || (type !== 'IFCBOOLEAN' && type !== 'IFCLOGICAL')) return converted;
+  const values = converted.values.map((member) => STEP_BOOLEAN_TOKENS.get(member) ?? member);
+  return { value: typeof converted.value === 'string' ? values.join(', ') : converted.value, values };
+}
+
+/**
  * Project a raw parser property record — applies SI conversion and resolves
  * the IDS dataType (`idsDataTypeOf`). A declared own `Unit` replaces the
  * project assignment for this value (#7395); only a value without one takes
@@ -91,11 +119,12 @@ export function projectProperty(p: RawProp, scales: EntityMeasureScales): Projec
     p.unit !== undefined
       ? applyOwnUnitConversion(baseValue, baseValues, dataType, p.unitSiScale, p.unit, p.valueDataTypes, p.unitSiOffset)
       : applyUnitConversion(baseValue, baseValues, dataType, scales.length, scales, p.valueDataTypes);
+  const { value, values } = withBooleanMembers(converted, dataType);
   const out: ProjectedProperty = {
     name: p.name,
-    value: converted.value,
+    value,
     ...types,
-    ...(converted.values ? { values: converted.values } : {}),
+    ...(values ? { values } : {}),
   };
   if (p.unit !== undefined) ownUnits.set(out, { symbol: p.unit, siScale: p.unitSiScale, siOffset: p.unitSiOffset });
   return out;
