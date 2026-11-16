@@ -8,6 +8,21 @@ Citations to `evidence/`, `tests/evidence/` and `docs/architecture/evidence/` pa
 at commit [`f98785c722`](https://github.com/LTplus-AG/ifc-lite/tree/f98785c722); the retained
 bundles left the tree in #9054.
 
+## IDS audit schema lookups from a name index (#ISSUE)
+
+**Output-identical: auditing an IDS of 2,425 specifications takes about 0.5 s instead of 2.3 s.**
+`findEntity` scanned its schema table and `getInheritanceChain` built a map of it on every call,
+and `auditIDSDocument` makes several such calls per facet (one per root for a classification, one
+per applicable entity of a property set). Both now read one upper-case name index per table, held
+in a `WeakMap` keyed by the memoised table array.
+- Interleaved, order alternated, 6 rounds, one process per sample, Node 22.20.0 on Windows 11 with
+  no other test run on the machine: warm `auditIDSDocument` median 2,297 -> 499 ms (range 2,261-2,312
+  -> 494-506), first call with the table decode 2,349 -> 557 ms. Per call, `findEntity` 17-19 -> 1.3 µs
+  and `getInheritanceChain` 72-75 -> 1.2 µs.
+- Identity: the audit report hashes the same in every sample, and so do the answers of both functions
+  for every name of every table, in its own spelling and upper case, in all four versions. The
+  benchmark IDS is generated from the bundled property set tables; the script is in the PR.
+
 ## Consolidation runs each retention variant once
 
 **Shipped, output-identical.** A consolidation that retains a healthy fold or

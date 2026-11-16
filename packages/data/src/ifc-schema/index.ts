@@ -139,6 +139,27 @@ export async function getPartOfRelations(
   return PART_OF_BY_VERSION[v];
 }
 
+// Upper-case name → entity, built once per entity list. Each version's list
+// is one memoised array (IFC4X3 and IFC4X3_ADD2 share it), so the index is
+// built once per table and goes with it. The first entry of a name wins, as
+// `Array.find` did; no table repeats a name (tested), so the inheritance
+// walk reads the entries its per-call map did (#ISSUE).
+const entityIndexes = new WeakMap<readonly IfcEntityInfo[], ReadonlyMap<string, IfcEntityInfo>>();
+
+function entityIndex(list: readonly IfcEntityInfo[]): ReadonlyMap<string, IfcEntityInfo> {
+  let index = entityIndexes.get(list);
+  if (!index) {
+    const byName = new Map<string, IfcEntityInfo>();
+    for (const e of list) {
+      const upper = e.name.toUpperCase();
+      if (!byName.has(upper)) byName.set(upper, e);
+    }
+    entityIndexes.set(list, byName);
+    index = byName;
+  }
+  return index;
+}
+
 /**
  * Case-insensitive entity lookup. Returns `undefined` when the entity
  * isn't part of the schema for the requested IFC version.
@@ -147,9 +168,7 @@ export async function findEntity(
   v: IfcSchemaVersion,
   name: string
 ): Promise<IfcEntityInfo | undefined> {
-  const upper = name.toUpperCase();
-  const list = await getEntities(v);
-  return list.find((e) => e.name.toUpperCase() === upper);
+  return entityIndex(await getEntities(v)).get(name.toUpperCase());
 }
 
 export async function findPropertySet(
@@ -169,9 +188,7 @@ export async function getInheritanceChain(
   v: IfcSchemaVersion,
   name: string
 ): Promise<readonly IfcEntityInfo[]> {
-  const list = await getEntities(v);
-  const byName = new Map<string, IfcEntityInfo>();
-  for (const e of list) byName.set(e.name.toUpperCase(), e);
+  const byName = entityIndex(await getEntities(v));
   const chain: IfcEntityInfo[] = [];
   let cursor: IfcEntityInfo | undefined = byName.get(name.toUpperCase());
   const seen = new Set<string>();
