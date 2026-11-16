@@ -2,7 +2,7 @@
 "@ifc-lite/ids": patch
 ---
 
-An IDS entity name given as a pattern or an enumeration now meets the upper-case IFC class, case-sensitively (#ISSUE). IDS 1.0 names a class in upper case (`IFCWALL`), and IfcTester matches a pattern or an enumeration against the upper-case class. IFC Lite matched them regardless of case, against `IfcWall`, so the same IDS selected different elements in the two tools.
+An IDS entity name given as a pattern or an enumeration now meets the upper-case IFC class, case-sensitively (#10544). IDS 1.0 names a class in upper case (`IFCWALL`), and IfcTester matches a pattern or an enumeration against the upper-case class. IFC Lite matched them regardless of case, against `IfcWall`, so the same IDS selected different elements in the two tools.
 
 What changes, in the entity facet and in a partOf facet's entity:
 

@@ -11,7 +11,7 @@
  * matched against the upper-case class name, case-sensitively, as IfcTester
  * does (`inst.is_a().upper()`). So `IFCDISTRIBUTION.*ELEMENT` selects
  * `IfcDistributionChamberElement`, and `IfcDistribution.*Element` or an
- * enumeration listing `IfcWall` selects nothing (#ISSUE).
+ * enumeration listing `IfcWall` selects nothing (#10544).
  *
  * A simple value is the facet's own concern: the entity facet rejects a
  * simple value that is not upper case, and an upper-case one meets the

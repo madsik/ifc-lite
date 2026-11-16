@@ -180,7 +180,7 @@ function checkAncestorAgainstFacet(
   }
 
   // Check parent entity type. A pattern or enumeration meets the upper-case
-  // class, as in the entity facet (#ISSUE); a simple value is still compared
+  // class, as in the entity facet (#10544); a simple value is still compared
   // regardless of case, as before.
   const entityMatches =
     facet.entity.name.type === 'simpleValue'

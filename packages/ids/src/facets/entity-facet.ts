@@ -109,7 +109,7 @@ export function checkEntityFacet(
     };
   }
 
-  // Check entity type: the IDS name against the upper-case class (#ISSUE)
+  // Check entity type: the IDS name against the upper-case class (#10544)
   if (
     !matchesEntityName(facet.name, entityType) &&
     !matchesIfc2x3Mapping(facet, entityType, expressId, accessor)

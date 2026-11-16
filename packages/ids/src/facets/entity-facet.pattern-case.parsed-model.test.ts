@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 /**
- * #ISSUE on real parsed models (IfcParser + createDataAccessor + validateIDS).
+ * #10544 on real parsed models (IfcParser + createDataAccessor + validateIDS).
  *
  * An entity name given as a pattern or an enumeration used to be matched
  * regardless of case, against the PascalCase class (`IfcWall`). IDS 1.0
@@ -81,7 +81,7 @@ function ids(schema: string, specs: Array<[string, string]>): string {
     .join('');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <ids xmlns="http://standards.buildingsmart.org/IDS" xmlns:xs="http://www.w3.org/2001/XMLSchema">
-  <info><title>#ISSUE</title></info>
+  <info><title>#10544</title></info>
   <specifications>${body}
   </specifications>
 </ids>`;
@@ -122,7 +122,7 @@ const ROWS: Array<[string, string, string[]]> = [
   ['partOf simple IFCBUILDINGSTOREY', partOf(simple('IFCBUILDINGSTOREY')), ELEMENTS],
 ];
 
-describe('#ISSUE: an entity name pattern or enumeration meets the upper-case class', () => {
+describe('#10544: an entity name pattern or enumeration meets the upper-case class', () => {
   for (const schema of ['IFC2X3', 'IFC4', 'IFC4X3_ADD2']) {
     it(`${schema}: patterns and enumerations select what IfcTester selects`, async () => {
       const xml = ids(schema, ROWS.map(([name, facets]) => [name, facets]));
@@ -167,7 +167,7 @@ describe('#ISSUE: an entity name pattern or enumeration meets the upper-case cla
   });
 });
 
-describe('#ISSUE controls: simple values stay as they were', () => {
+describe('#10544 controls: simple values stay as they were', () => {
   it('a simple IfcWall is still rejected by the entity facet, and a simple partOf IfcBuildingStorey still matches', async () => {
     // IfcTester 0.8.3 selects W-1 for the first and nothing for the second;
     // IFC Lite follows buildingSMART's
@@ -184,9 +184,9 @@ describe('#ISSUE controls: simple values stay as they were', () => {
   });
 });
 
-describe('#ISSUE controls: a getEntityType answer that is not a string answers as before', () => {
+describe('#10544 controls: a getEntityType answer that is not a string answers as before', () => {
   // checkEntityFacet is exported, and a JavaScript accessor is not held to
-  // `string | undefined`. Before #ISSUE the class went to matchConstraint as
+  // `string | undefined`. Before #10544 the class went to matchConstraint as
   // it was, which reads it as text: 42 met no name, and an object whose
   // toString gives 'IfcWall' met IFCWALL. Neither may throw.
   const names: IDSConstraint[] = [
