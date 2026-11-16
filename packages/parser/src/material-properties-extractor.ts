@@ -8,6 +8,7 @@ import { iterateEffectiveEntities } from '@ifc-lite/data';
 import type { IfcDataStore } from './columnar-parser.js';
 import { copyParsedExtras, parsePropertyValue, parsePropertyValueWithComplex, type ExtractedProperty } from './property-value-parser.js';
 import { ComplexPropertyBudget } from './property-complex-value.js';
+import { resolvePropertyUnit } from './property-unit.js';
 import { collectMaterialLeaves, getMaterialDisplay } from './material-resolver.js';
 import type { IfcEntity } from './types.js';
 import { materialAssignmentState, materialRecordReader, type MaterialReadView } from './material-overlay.js';
@@ -150,6 +151,15 @@ function getMaterialPropertyIndex(store: IfcDataStore, view?: MaterialProperties
                     value: pv.value,
                 };
                 copyParsedExtras(entry, pv);
+                // The property's own Unit, read as an ordinary property set reads
+                // it (extractPsetsFromIds); without it a reader takes the value in
+                // the project unit (#ISSUE). The unit records come from the source.
+                const unit = store.source?.length
+                    ? resolvePropertyUnit(store, extractor, propEntity.type, propAttrs, pv.dataType)
+                    : undefined;
+                if (unit) entry.unit = unit.symbol;
+                if (unit?.siScale !== undefined) entry.unitSiScale = unit.siScale;
+                if (unit?.siOffset !== undefined) entry.unitSiOffset = unit.siOffset;
                 properties.push(entry);
             }
             if (properties.length === 0) continue;
