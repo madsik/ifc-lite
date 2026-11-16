@@ -14,17 +14,21 @@
  *   specification can only ever fail (corpus: entity/invalid-an_entity_not_
  *   matching_the_specified_class_should_fail, …_subclasses_are_not_considered_
  *   as_matching, …_as_a_xsd_regex_pattern_1_2, …_as_an_enumeration_3_3).
- * - In IFC2X3 a name from the IDS occurrence/type mapping table (`IFCSENSOR`)
- *   is met by its occurrence class (`IFCDISTRIBUTIONCONTROLELEMENT`) typed
- *   by the mapped type object, and the validator matches both names on such
- *   an element (`matchesIfc2x3Mapping`). So the two names meet; two mapping
- *   names, or a class above the occurrence class, still do not (#ISSUE).
+ * - In IFC2X3 an element of an occurrence class (`IFCDISTRIBUTIONCONTROLELEMENT`)
+ *   typed by a type object of the IDS occurrence/type mapping table also
+ *   matches the table's name for it (`IFCSENSOR`), and the validator matches
+ *   either name on it (`matchesIfc2x3Mapping`). So a pair meets when both
+ *   facets admit one row's element, decided as the validator decides it,
+ *   for simple values, enumerations and patterns. Two mapping names, or a
+ *   class above the occurrence class, still never meet (#ISSUE).
  */
 
+import { UnsafeRegexPatternError } from '@ifc-lite/regex-guard';
 import type { IfcSchemaVersion } from '@ifc-lite/data';
 import type { IDSEntityFacet } from '../../types.js';
 import type { IDSAuditIssue } from '../types.js';
-import { rowForAlias } from '../../facets/ifc2x3-type-mapping.js';
+import { matchConstraint } from '../../constraints/index.js';
+import { IFC2X3_TYPE_MAPPING_ROWS, type Ifc2x3TypeMappingRow } from '../../facets/ifc2x3-type-mapping.js';
 
 export type EntityResolver = (facet: IDSEntityFacet, version: IfcSchemaVersion) => Promise<string[]>;
 
@@ -60,7 +64,7 @@ export async function auditEntityRequirement(
   if (applicable.length === 0 || required.length === 0) return;
   const admitted = new Set(required.map((name) => name.toUpperCase()));
   if (applicable.some((name) => admitted.has(name.toUpperCase()))) return;
-  if (version === 'IFC2X3' && mappingNamesMeet(applicable, required)) return;
+  if (version === 'IFC2X3' && meetThroughMapping([applicability, applicable], [requirement, required])) return;
   issues.push({
     severity: 'error',
     code: 'E_IFC_ENTITY_IMPOSSIBLE',
@@ -71,15 +75,30 @@ export async function auditEntityRequirement(
   });
 }
 
-/** Whether a name on one side is an IFC2X3 mapping name whose occurrence class the other side names. */
-function mappingNamesMeet(applicable: readonly string[], required: readonly string[]): boolean {
-  const upper = (names: readonly string[]) => new Set(names.map((name) => name.toUpperCase()));
-  const occurrenceIn = (names: readonly string[], classes: ReadonlySet<string>) =>
-    names.some((name) => {
-      const occurrence = rowForAlias(name.toUpperCase())?.occurrence;
-      return occurrence !== undefined && classes.has(occurrence);
-    });
-  return occurrenceIn(applicable, upper(required)) || occurrenceIn(required, upper(applicable));
+type Side = [facet: IDSEntityFacet, classes: readonly string[]];
+
+/**
+ * IFC2X3: whether one element of a mapping row can meet both facets. A facet
+ * admits that element when its resolved classes hold the row's occurrence
+ * class, or when its name matches the row's name as the validator matches it
+ * (`matchConstraint`, case-insensitive).
+ */
+function meetThroughMapping(...sides: [Side, Side]): boolean {
+  const admitters = sides.map(([facet, classes]) => {
+    const upper = new Set(classes.map((name) => name.toUpperCase()));
+    return (row: Ifc2x3TypeMappingRow) => upper.has(row.occurrence) || matchesName(facet, row.alias);
+  });
+  return IFC2X3_TYPE_MAPPING_ROWS.some((row) => admitters.every((admits) => admits(row)));
+}
+
+/** A pattern the validator cannot evaluate fails its specification there; here it matches no mapping name, so the verdict stays the class check's. */
+function matchesName(facet: IDSEntityFacet, name: string): boolean {
+  try {
+    return matchConstraint(facet.name, name, { caseInsensitive: true });
+  } catch (error) {
+    if (error instanceof UnsafeRegexPatternError) return false;
+    throw error;
+  }
 }
 
 function preview(names: readonly string[]): string {

@@ -99,6 +99,9 @@ const ROWS: readonly Ifc2x3TypeMappingRow[] = [
   { alias: 'IFCVIBRATIONISOLATOR', occurrence: 'IFCEQUIPMENTELEMENT', typeEntity: 'IFCVIBRATIONISOLATORTYPE' },
 ];
 
+/** Every row of the table, for a caller that decides per row, as the audit's entity-pair check does. */
+export const IFC2X3_TYPE_MAPPING_ROWS: readonly Ifc2x3TypeMappingRow[] = ROWS;
+
 /** Rows indexed by occurrence class, for the (entityType, typeEntityType) → alias direction. */
 const BY_OCCURRENCE: ReadonlyMap<string, readonly Ifc2x3TypeMappingRow[]> = (() => {
   const map = new Map<string, Ifc2x3TypeMappingRow[]>();

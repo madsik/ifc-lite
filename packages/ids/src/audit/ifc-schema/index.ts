@@ -218,7 +218,7 @@ async function auditClassificationFacet(
   const roots = version === 'IFC2X3' ? [expected] : [expected, ...CLASSIFIABLE_RESOURCES];
   let ok = false;
   for (const root of roots) {
-    if (await isEntitySubtypeOf(version, entityName, root)) { ok = true; break; }
+    if (await isEntitySubtypeOf(version, selectedClass(version, entityName), root)) { ok = true; break; }
   }
   if (!ok) {
     issues.push({
@@ -245,7 +245,7 @@ async function auditMaterialFacet(
   // Same rule as classification — material associations require a
   // subtype of IfcObjectDefinition (IFC4+) / IfcRoot (IFC2X3).
   const expected = version === 'IFC2X3' ? 'IfcRoot' : 'IfcObjectDefinition';
-  const ok = await isEntitySubtypeOf(version, entityName, expected);
+  const ok = await isEntitySubtypeOf(version, selectedClass(version, entityName), expected);
   if (!ok) {
     issues.push({
       severity: 'error',
@@ -514,7 +514,7 @@ async function auditPropertyFacet(
       );
       const anyMatches = (
         await Promise.all(
-          candidates.map((c) => psetApplies(version, c, applicable))
+          candidates.map((c) => psetAppliesToSelection(version, c, applicable))
         )
       ).some(Boolean);
       if (!anyMatches) {
@@ -572,6 +572,23 @@ async function psetApplies(
     if (await isEntitySubtypeOf(version, entityName, candidate)) return true;
   }
   return false;
+}
+
+/**
+ * The class whose elements an applicability entity name selects. In IFC2X3 a
+ * name of the occurrence/type mapping table (`IFCSENSOR`) selects elements of
+ * its occurrence class (`IFCDISTRIBUTIONCONTROLELEMENT`) typed by the mapped
+ * type object, as the validator matches it (`matchesIfc2x3Mapping`, #ISSUE).
+ */
+function selectedClass(version: IfcSchemaVersion, name: string): string {
+  return (version === 'IFC2X3' ? rowForAlias(name.toUpperCase())?.occurrence : undefined) ?? name;
+}
+
+/** {@link psetApplies} for what a name selects: for a mapping name, its occurrence class or the mapped type object, whose sets the element inherits. */
+async function psetAppliesToSelection(version: IfcSchemaVersion, name: string, applicable: readonly string[]): Promise<boolean> {
+  const row = version === 'IFC2X3' ? rowForAlias(name.toUpperCase()) : undefined;
+  if (!row) return psetApplies(version, name, applicable);
+  return (await psetApplies(version, row.occurrence, applicable)) || psetApplies(version, row.typeEntity, applicable);
 }
 
 /**
@@ -847,7 +864,7 @@ async function auditPartOfFacet(
   ) {
     const appName = applicabilityEntity.name.value;
     const memberName = [...new Set(candidates.map((r) => r.member))].join('" or "');
-    const memberOk = await anySubtypeOf(version, appName, candidates.map((r) => r.member));
+    const memberOk = await anySubtypeOf(version, selectedClass(version, appName), candidates.map((r) => r.member));
     if (!memberOk) {
       issues.push({
         severity: 'error',
