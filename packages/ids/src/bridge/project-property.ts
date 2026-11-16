@@ -95,8 +95,9 @@ function withBooleanMembers(
   converted: { value: ProjectedProperty['value']; values: string[] | undefined },
   dataType: string | undefined
 ): { value: ProjectedProperty['value']; values: ProjectedProperty['values'] } {
+  if (!converted.values) return converted;
   const type = dataType?.toUpperCase();
-  if (!converted.values || (type !== 'IFCBOOLEAN' && type !== 'IFCLOGICAL')) return converted;
+  if (type !== 'IFCBOOLEAN' && type !== 'IFCLOGICAL') return converted;
   const values = converted.values.map((member) => STEP_BOOLEAN_TOKENS.get(member) ?? member);
   return { value: typeof converted.value === 'string' ? values.join(', ') : converted.value, values };
 }
