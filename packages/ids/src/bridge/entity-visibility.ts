@@ -90,7 +90,7 @@ export function overlayEntityLookup(view: EntityVisibilityView): OverlayEntityLo
       return created.get(expressId)?.type;
     },
     // Every scalar attribute the entity sets, GlobalId included: a created
-    // entity reports the same attribute names a parsed one does (#ISSUE).
+    // entity reports the same attribute names a parsed one does (#10543).
     createdAttributes(expressId) {
       return namedAttributes(expressId);
     },
@@ -107,7 +107,7 @@ export function overlayEntityLookup(view: EntityVisibilityView): OverlayEntityLo
  * stripped, `.T.`/`.F.` as booleans, logical-unknown and unset as absent,
  * typed wrappers unwrapped. A reference (`'#5'`, which the STEP writer emits
  * as `#5`) reads as the referenced entity's STEP id, the number 5, as the
- * parser reports a parsed one (#ISSUE). Aggregates are absent.
+ * parser reports a parsed one (#10543). Aggregates are absent.
  */
 function scalarAttributeValue(raw: unknown): AttributeValue | undefined {
   if (typeof raw === 'number' || typeof raw === 'boolean') return raw;

@@ -3,7 +3,7 @@
 "@ifc-lite/ids": patch
 ---
 
-An IDS attribute facet now finds `GlobalId`, `OwnerHistory`, `ObjectPlacement` and `Representation` (#ISSUE). The IDS bridge read an entity's attributes through the parser's display list, which leaves out those four and `HasPropertySets` and `RepresentationMaps`. So a name pattern such as `Global.*` or an enumeration listing `GlobalId` found no attribute on any element, and `OwnerHistory`, `ObjectPlacement` and `Representation` were missing on every element, by any name.
+An IDS attribute facet now finds `GlobalId`, `OwnerHistory`, `ObjectPlacement` and `Representation` (#10543). The IDS bridge read an entity's attributes through the parser's display list, which leaves out those four and `HasPropertySets` and `RepresentationMaps`. So a name pattern such as `Global.*` or an enumeration listing `GlobalId` found no attribute on any element, and `OwnerHistory`, `ObjectPlacement` and `Representation` were missing on every element, by any name.
 
 `@ifc-lite/parser`: `extractAllEntityAttributes(store, id, { includeDisplaySkipped: true })` keeps the attributes the display list leaves out. Without the option, or with `null` or a value that is not an object, the result is the same as before.
 

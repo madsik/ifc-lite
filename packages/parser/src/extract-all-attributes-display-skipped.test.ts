@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 /**
- * #ISSUE: `extractAllEntityAttributes(store, id, { includeDisplaySkipped: true })`
+ * #10543: `extractAllEntityAttributes(store, id, { includeDisplaySkipped: true })`
  * keeps the attributes the display list (`SKIP_DISPLAY_ATTRS`) leaves out, for
  * the IDS attribute facet. Without the option the result is the one every
  * other caller has always had: the diff fingerprints hash it.
@@ -37,7 +37,7 @@ async function store() {
   return new IfcParser().parseColumnar(new TextEncoder().encode(MODEL).buffer as ArrayBuffer, { disableWorkerScan: true });
 }
 
-describe('extractAllEntityAttributes: includeDisplaySkipped (#ISSUE)', () => {
+describe('extractAllEntityAttributes: includeDisplaySkipped (#10543)', () => {
   it('keeps GlobalId, OwnerHistory, ObjectPlacement and Representation, in schema order', async () => {
     const s = await store();
     expect(extractAllEntityAttributes(s, 10, { includeDisplaySkipped: true })).toEqual([

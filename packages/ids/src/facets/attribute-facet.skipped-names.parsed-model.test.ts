@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 /**
- * #ISSUE on real parsed models (IfcParser + createDataAccessor + validateIDS).
+ * #10543 on real parsed models (IfcParser + createDataAccessor + validateIDS).
  *
  * The attribute facet used to read an entity's attributes through the
  * parser's display list, which leaves out GlobalId, OwnerHistory,
@@ -82,7 +82,7 @@ function ids(schema: string, specs: Spec[]): string {
     .join('');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <ids xmlns="http://standards.buildingsmart.org/IDS" xmlns:xs="http://www.w3.org/2001/XMLSchema">
-  <info><title>#ISSUE</title></info>
+  <info><title>#10543</title></info>
   <specifications>${body}
   </specifications>
 </ids>`;
@@ -140,7 +140,7 @@ async function rows(xml: string, accessor: ReturnType<typeof createDataAccessor>
   ]);
 }
 
-describe('#ISSUE: an attribute facet finds GlobalId, OwnerHistory, ObjectPlacement and Representation', () => {
+describe('#10543: an attribute facet finds GlobalId, OwnerHistory, ObjectPlacement and Representation', () => {
   for (const schema of ['IFC2X3', 'IFC4', 'IFC4X3_ADD2']) {
     it(`${schema}: names, patterns and enumerations give IfcTester's rows`, async () => {
       const { store, modelInfo } = await parse(step(schema));
@@ -213,7 +213,7 @@ describe('#ISSUE: an attribute facet finds GlobalId, OwnerHistory, ObjectPlaceme
   });
 });
 
-describe('#ISSUE controls: what the display list never hid stays as it was', () => {
+describe('#10543 controls: what the display list never hid stays as it was', () => {
   it('a simple GlobalId, a Name pattern and an unset attribute answer as before', async () => {
     const { store, modelInfo } = await parse(step('IFC4'));
     const xml = ids('IFC4', [

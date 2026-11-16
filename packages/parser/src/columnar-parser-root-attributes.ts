@@ -79,7 +79,7 @@ function longNameIndexFor(type: string, schemaVersion: string | undefined): numb
  * GlobalId, OwnerHistory, ObjectPlacement, Representation, HasPropertySets,
  * RepresentationMaps) are left out. `includeDisplaySkipped: true` keeps them,
  * for a checker that must see every attribute an entity sets, such as the IDS
- * attribute facet (#ISSUE). Their values are read like any other slot.
+ * attribute facet (#10543). Their values are read like any other slot.
  */
 export function extractAllEntityAttributes(
     store: IfcDataStore,

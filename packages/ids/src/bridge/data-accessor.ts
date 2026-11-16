@@ -93,7 +93,7 @@ export function createDataAccessor(
   // full re-parses to a single extraction per entity for this accessor's store.
   // The extraction keeps the attributes a display leaves out (GlobalId,
   // ObjectPlacement, ...): an attribute facet must find every attribute an
-  // entity sets, by name, pattern or enumeration (#ISSUE).
+  // entity sets, by name, pattern or enumeration (#10543).
   const attrCache = new Map<
     number,
     Array<{ name: string; value: string | number | boolean }>
