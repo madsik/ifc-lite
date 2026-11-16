@@ -105,8 +105,9 @@ export function overlayEntityLookup(view: EntityVisibilityView): OverlayEntityLo
  * The scalar an authored attribute holds, normalised the way
  * `extractAllEntityAttributes` normalises a parsed one: `.ENUM.` markers
  * stripped, `.T.`/`.F.` as booleans, logical-unknown and unset as absent,
- * typed wrappers unwrapped. References and aggregates are not attribute
- * values the IDS attribute facet compares, so they are absent.
+ * typed wrappers unwrapped. A reference (`'#5'`, which the STEP writer emits
+ * as `#5`) reads as the referenced entity's STEP id, the number 5, as the
+ * parser reports a parsed one (#ISSUE). Aggregates are absent.
  */
 function scalarAttributeValue(raw: unknown): AttributeValue | undefined {
   if (typeof raw === 'number' || typeof raw === 'boolean') return raw;
@@ -114,7 +115,7 @@ function scalarAttributeValue(raw: unknown): AttributeValue | undefined {
     if (raw === '.U.' || raw === '.X.') return undefined;
     if (raw === '.T.') return true;
     if (raw === '.F.') return false;
-    if (/^#\d+$/.test(raw)) return undefined;
+    if (/^#\d+$/.test(raw)) return Number(raw.slice(1));
     return raw.length > 1 && raw.startsWith('.') && raw.endsWith('.') ? raw.slice(1, -1) : raw;
   }
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {

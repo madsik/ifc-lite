@@ -68,7 +68,12 @@ function longNameIndexFor(type: string, schemaVersion: string | undefined): numb
 /**
  * Extract ALL named entity attributes on-demand from source buffer.
  * Uses the IFC schema to map attribute indices to names.
- * Returns only string/enum attributes, skipping references and structural attributes.
+ * Returns the attributes that hold a value: strings and enumerations (`.ENUM.`
+ * markers stripped), numbers, booleans and typed values (`IFCREAL(0.)` as its
+ * number). A reference comes back as the referenced entity's STEP id, a
+ * number. Unset, derived and logical-unknown slots are left out. A list is
+ * not returned as a list: one of exactly two items reads like a typed value,
+ * one of any other length is left out.
  *
  * By default the attributes a display shows elsewhere (`SKIP_DISPLAY_ATTRS`:
  * GlobalId, OwnerHistory, ObjectPlacement, Representation, HasPropertySets,
@@ -79,9 +84,11 @@ function longNameIndexFor(type: string, schemaVersion: string | undefined): numb
 export function extractAllEntityAttributes(
     store: IfcDataStore,
     entityId: number,
-    options: { includeDisplaySkipped?: boolean } = {}
+    options?: { includeDisplaySkipped?: boolean } | null
 ): Array<{ name: string; value: string | number | boolean }> {
-    const skip = options.includeDisplaySkipped === true ? undefined : SKIP_DISPLAY_ATTRS;
+    // `?.`: a JavaScript caller's third argument was ignored before the option
+    // existed, so null or a value that is not an object still reads as no option.
+    const skip = options?.includeDisplaySkipped === true ? undefined : SKIP_DISPLAY_ATTRS;
     // @raw-entity-enumeration-ok on-demand named attributes are extracted from this one source record
     const ref = store.entityIndex.byId.get(entityId);
     if (!ref) return [];

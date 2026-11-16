@@ -11,7 +11,7 @@
  * So a name pattern or enumeration never found GlobalId, and none of the
  * three references could be found at all.
  *
- * Two walls and a wall type, written as IFC2X3, IFC4 and IFC4X3_ADD2: W-1
+ * Two walls, written as IFC2X3, IFC4 and IFC4X3_ADD2: W-1
  * has an owner history, a placement and a representation; W-2 has none.
  * The expected rows are IfcTester's on the same text (ifctester 0.8.3 on
  * IfcOpenShell 0.8.4, `ids.open(..., validate=True)`), with the project,
@@ -184,6 +184,32 @@ describe('#ISSUE: an attribute facet finds GlobalId, OwnerHistory, ObjectPlaceme
     const xml = ids('IFC4', [['pattern Global.*', pattern('Global.*')]]);
     expect(await rows(xml, accessor, modelInfo)).toEqual([['pattern Global.*', 'pass', 3, 0, []]]);
     expect(accessor.getAttributeNames?.(900)).toEqual(['GlobalId', 'Name']);
+  });
+
+  it('a created wall that sets an owner history, a placement and a representation answers as the parsed W-1', async () => {
+    // The created wall sets '#4', '#5' and '#11', as the parsed W-1 does. A
+    // created reference reads as the referenced STEP id, as the parser reports
+    // a parsed one, so both report the same names and meet the same checks.
+    const { store, modelInfo } = await parse(step('IFC4'));
+    const accessor = createDataAccessor(store, undefined, {
+      isDeleted: () => false,
+      getNewEntities: () => [
+        { expressId: 900, type: 'IfcWall', attributes: ['2Wall00000000000000900', '#4', 'W-3', null, null, '#5', '#11', null, null] },
+      ],
+    });
+    const parsed = accessor.getAttributeNames?.(10);
+    expect(parsed).toEqual(['GlobalId', 'OwnerHistory', 'Name', 'ObjectPlacement', 'Representation']);
+    expect(accessor.getAttributeNames?.(900)).toEqual(parsed);
+    const xml = ids('IFC4', [
+      ['OwnerHistory', simple('OwnerHistory')],
+      ['ObjectPlacement', simple('ObjectPlacement')],
+      ['Representation', simple('Representation')],
+    ]);
+    expect(await rows(xml, accessor, modelInfo)).toEqual([
+      ['OwnerHistory', 'fail', 3, 1, ['W-2']],
+      ['ObjectPlacement', 'fail', 3, 1, ['W-2']],
+      ['Representation', 'fail', 3, 1, ['W-2']],
+    ]);
   });
 });
 

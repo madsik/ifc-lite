@@ -56,7 +56,7 @@ describe('extractAllEntityAttributes: includeDisplaySkipped (#ISSUE)', () => {
     ]);
   });
 
-  it('control: without the option, or with it false, the result is the display list as before', async () => {
+  it('control: without the option, with it false, null or not an object, the result is the display list as before', async () => {
     const s = await store();
     const display = [
       { name: 'Name', value: 'W-1' },
@@ -67,6 +67,12 @@ describe('extractAllEntityAttributes: includeDisplaySkipped (#ISSUE)', () => {
     expect(extractAllEntityAttributes(s, 10)).toEqual(display);
     expect(extractAllEntityAttributes(s, 10, {})).toEqual(display);
     expect(extractAllEntityAttributes(s, 10, { includeDisplaySkipped: false })).toEqual(display);
+    // Before the option existed a JavaScript caller's third argument was
+    // ignored: null and a value that is not an object still return.
+    expect(extractAllEntityAttributes(s, 10, null)).toEqual(display);
+    for (const notAnObject of [true, 1, 'includeDisplaySkipped']) {
+      expect(extractAllEntityAttributes(s, 10, notAnObject as unknown as { includeDisplaySkipped?: boolean })).toEqual(display);
+    }
   });
 
   it('control: with the option the result is the default one plus only the display-skipped names', async () => {
